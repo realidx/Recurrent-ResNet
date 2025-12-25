@@ -1,0 +1,32 @@
+seed: 0
+device: cuda
+
+env:
+  name: dm_control/walker_walk
+  num_envs: 64
+  frame_stack: 3
+
+train:
+  total_env_steps: 1000000
+  utd_ratio: 10
+  batch_size: 512
+  update_every: 1
+  log_interval: 1000
+  eval_interval: 10000
+
+model:
+  encoder:
+    type: untied_resnet
+    depth: 64
+    width: 256
+    activation: relu
+  recurrent:
+    steps: 4
+    tie_weights: true
+    depth_dropout: 0.0
+    apply_to_actor: false
+    apply_to_critic: true
+
+logging:
+  backend: tensorboard
+  project: recurrent-resnet

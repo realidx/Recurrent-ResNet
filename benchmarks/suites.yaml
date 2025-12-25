@@ -1,0 +1,21 @@
+suites:
+  quick_debug:
+    envs:
+      - dm_control/cartpole_balance
+      - dm_control/walker_walk
+    steps: 200000
+    num_envs: 64
+  depth_scaling_focus:
+    envs:
+      - dm_control/humanoid_walk
+      - dm_control/quadruped_walk
+      - dm_control/finger_turn_hard
+    steps: 1000000
+    num_envs: 256
+  small_light:
+    envs:
+      - reacher
+      - pusher
+      - simple_maze
+    steps: 200000
+    num_envs: 64
