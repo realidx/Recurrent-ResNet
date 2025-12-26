@@ -111,6 +111,9 @@ class Args:
     use_relu: int = 0
     num_render: int = 10
     save_buffer: int = 0
+    compact_metrics: bool = True
+    print_full_metrics: bool = False
+    print_eval_metrics_keys: bool = False
     
     # to be filled in runtime
     env_steps_per_actor_step : int = 0
@@ -959,6 +962,12 @@ if __name__ == "__main__":
                 transitions.observation[:, args.obs_dim:],
                 steps=critic_steps,
             )
+
+            pos_dist = jnp.sqrt(jnp.sum((sa_repr - g_repr) ** 2, axis=-1))
+            sa_norm = jnp.linalg.norm(sa_repr, axis=-1)
+            g_norm = jnp.linalg.norm(g_repr, axis=-1)
+            sa_var = jnp.mean(jnp.var(sa_repr, axis=0))
+            g_var = jnp.mean(jnp.var(g_repr, axis=0))
              
             # InfoNCE
             logits = -jnp.sqrt(jnp.sum((sa_repr[:, None, :] - g_repr[None, :, :]) ** 2, axis=-1))       # shape = BxB
@@ -968,12 +977,24 @@ if __name__ == "__main__":
             logsumexp = jax.nn.logsumexp(logits + 1e-6, axis=1)
             critic_loss += args.logsumexp_penalty_coeff * jnp.mean(logsumexp**2)
 
-            I, correct, logits_pos, logits_neg = jnp.zeros(1), jnp.zeros(1), jnp.zeros(1), jnp.zeros(1)
-                
+            logits_pos = jnp.mean(jnp.diag(logits))
+            logits_neg = jnp.mean(logits)  # includes diagonal; fine for a rough scale check
+            I, correct = jnp.zeros(1), jnp.zeros(1)
 
-            return critic_loss, (logsumexp, I, correct, logits_pos, logits_neg)
+            return critic_loss, (
+                logsumexp,
+                I,
+                correct,
+                logits_pos,
+                logits_neg,
+                pos_dist.mean(),
+                sa_norm.mean(),
+                g_norm.mean(),
+                sa_var,
+                g_var,
+            )
             
-        (loss, (logsumexp, I, correct, logits_pos, logits_neg)), grad = jax.value_and_grad(critic_loss, has_aux=True)(training_state.critic_state.params, transitions, key)
+        (loss, (logsumexp, I, correct, logits_pos, logits_neg, pos_dist_mean, sa_norm_mean, g_norm_mean, sa_var_mean, g_var_mean)), grad = jax.value_and_grad(critic_loss, has_aux=True)(training_state.critic_state.params, transitions, key)
         new_critic_state = training_state.critic_state.apply_gradients(grads=grad)
         training_state = training_state.replace(critic_state = new_critic_state)
 
@@ -983,6 +1004,12 @@ if __name__ == "__main__":
             "logits_neg": logits_neg,
             "logsumexp": logsumexp.mean(),
             "critic_loss": loss,
+            "contrastive_loss": loss,
+            "pos_dist": pos_dist_mean,
+            "sa_norm": sa_norm_mean,
+            "g_norm": g_norm_mean,
+            "sa_var": sa_var_mean,
+            "g_var": g_var_mean,
         }
 
         return training_state, metrics
@@ -1106,6 +1133,7 @@ if __name__ == "__main__":
             num_eval_envs=args.num_eval_envs,
             episode_length=args.episode_length,
             key=eval_env_key,
+            print_metrics_keys=args.print_eval_metrics_keys,
         )
         
     elif args.eval_actor == 1:
@@ -1122,6 +1150,7 @@ if __name__ == "__main__":
             num_eval_envs=args.num_eval_envs,
             episode_length=args.episode_length,
             key=eval_env_key,
+            print_metrics_keys=args.print_eval_metrics_keys,
         )
     
     elif args.eval_actor > 1:
@@ -1140,6 +1169,7 @@ if __name__ == "__main__":
             num_eval_envs=args.num_eval_envs,
             episode_length=args.episode_length,
             key=eval_env_key,
+            print_metrics_keys=args.print_eval_metrics_keys,
         )
     
 
@@ -1169,7 +1199,44 @@ if __name__ == "__main__":
 
         metrics = evaluator.run_evaluation(training_state, metrics)
 
-        print(f"epoch {ne} out of {args.num_epochs} complete. metrics: {metrics}", flush=True)
+        if args.compact_metrics:
+            def to_float(value):
+                if hasattr(value, "item"):
+                    return float(value.item())
+                return float(value)
+
+            summary_keys = [
+                "training/envsteps",
+                "training/sps",
+                "training/walltime",
+                "training/contrastive_loss",
+                "training/pos_dist",
+                "training/sa_norm",
+                "training/g_norm",
+                "training/sa_var",
+                "training/g_var",
+                "training/logits_pos",
+                "training/logits_neg",
+                "eval/episode_reward",
+                "eval/episode_success",
+                "eval/episode_success_hard",
+                "eval/episode_success_easy",
+                "eval/episode_dist",
+                "eval/episode_distance_from_origin",
+                "eval/epoch_eval_time",
+            ]
+            summary = {
+                "env_id": args.env_id,
+                "encoder_type": args.encoder_type,
+                "recur_steps": args.recur_steps,
+            }
+            for key_name in summary_keys:
+                if key_name in metrics:
+                    summary[key_name] = to_float(metrics[key_name])
+            print(f"epoch {ne} summary: {summary}", flush=True)
+
+        if args.print_full_metrics:
+            print(f"epoch {ne} out of {args.num_epochs} complete. metrics: {metrics}", flush=True)
 
         if args.checkpoint:
             if ne < 5 or ne >= args.num_epochs - 5 or ne % 10 == 0:

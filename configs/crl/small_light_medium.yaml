@@ -1,0 +1,24 @@
+exp_name: small_light_medium
+track: false
+capture_vis: false
+checkpoint: false
+
+# Medium-scale settings
+num_epochs: 4
+total_env_steps: 200000
+num_envs: 32
+num_eval_envs: 8
+batch_size: 256
+unroll_length: 8
+min_replay_size: 1000
+max_replay_size: 10000
+num_sgd_batches_per_training_step: 20
+
+# Network defaults
+critic_network_width: 256
+actor_network_width: 256
+critic_depth: 16
+actor_depth: 16
+encoder_type: untied_resnet
+recur_apply_to_actor: 0
+recur_apply_to_critic: 0
