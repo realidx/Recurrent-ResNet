@@ -1,0 +1,18 @@
+exp_name: phase1_r0_t64
+track: false
+capture_vis: false
+checkpoint: true
+
+# Tied recursion R0 (plain), T=64
+actor_depth: 256
+critic_depth: 256
+encoder_type: recurrent_tied
+recur_steps: 64
+recur_variant: plain
+recur_apply_to_actor: 1
+recur_apply_to_critic: 1
+
+# Phase 1 stability defaults
+recur_pre_norm: 1
+recur_alpha_mode: scaled
+grad_clip_norm: 1.0

@@ -19,3 +19,6 @@ suites:
       - simple_maze
     steps: 200000
     num_envs: 64
+  phase1_maze:
+    envs:
+      - ant_u_maze

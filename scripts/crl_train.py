@@ -32,6 +32,15 @@ from recurrent_resnet.jax.recurrent_core import RecurrentResidualCore, ResidualS
 from evaluator import CrlEvaluator
 from buffer import TrajectoryUniformSamplingQueue
 
+def resolve_alpha(alpha_mode: str, alpha_init: float, steps: int) -> float:
+    if steps < 1:
+        return float(alpha_init)
+    if alpha_mode == "scaled":
+        return 1.0 / float(steps)
+    if alpha_mode == "learned":
+        return float(alpha_init) / float(steps)
+    return float(alpha_init)
+
 @dataclass
 class Args:
     exp_name: str = "train"
@@ -81,7 +90,7 @@ class Args:
     actor_skip_connections: int = 0 # 0 for no skip connections, >= 0 means the frequency of skip connections (every N layers)
     critic_skip_connections: int = 0 # 0 for no skip connections, >= 0 means the frequency of skip connections (every N layers)
 
-    encoder_type: str = "untied_resnet" # untied_resnet | recurrent_tied | recurrent_untied
+    encoder_type: str = "untied_resnet" # untied_resnet | recurrent_tied | recurrent_untied | recurrent_partial
     recur_steps: int = 4
     recur_depth_dropout: float = 0.0
     recur_apply_to_actor: int = 0
@@ -89,6 +98,12 @@ class Args:
     recur_init_identity: int = 1
     recur_eval_steps: int = 0
     recur_trunc_bptt: int = 0
+    recur_variant: str = "plain" # plain | film | gated
+    recur_stages: int = 1
+    recur_step_embed_dim: int = 0
+    recur_pre_norm: int = 0
+    recur_alpha_mode: str = "fixed" # fixed | scaled | learned
+    recur_alpha_init: float = 1.0
     
     num_episodes_per_env: int = 1 #recommended to keep at 1
     training_steps_multiplier: int = 1 #recommended to keep at 1
@@ -114,6 +129,7 @@ class Args:
     compact_metrics: bool = True
     print_full_metrics: bool = False
     print_eval_metrics_keys: bool = False
+    grad_clip_norm: float = 0.0
     
     # to be filled in runtime
     env_steps_per_actor_step : int = 0
@@ -135,6 +151,12 @@ class SA_encoder(nn.Module):
     recur_steps: int = 4
     recur_init_identity: int = 1
     recur_trunc_bptt: int = 0
+    recur_variant: str = "plain"
+    recur_stages: int = 1
+    recur_step_embed_dim: int = 0
+    recur_pre_norm: int = 0
+    recur_alpha_mode: str = "fixed"
+    recur_alpha_init: float = 1.0
     @nn.compact
     def __call__(self, s: jnp.ndarray, a: jnp.ndarray, steps: Optional[jnp.ndarray] = None):
         lecun_unfirom = variance_scaling(1 / 3, "fan_in", "uniform")
@@ -159,21 +181,30 @@ class SA_encoder(nn.Module):
         if self.encoder_type == "untied_resnet":
             num_blocks = self.network_depth // 4
             if num_blocks > 0:
+                alpha = resolve_alpha(self.recur_alpha_mode, self.recur_alpha_init, num_blocks)
                 x = ResidualStack(
                     width=self.network_width,
                     num_blocks=num_blocks,
                     norm_type=self.norm_type,
                     use_relu=self.use_relu,
+                    pre_norm=bool(self.recur_pre_norm),
+                    alpha=alpha,
                 )(x)
-        elif self.encoder_type in {"recurrent_tied", "recurrent_untied"}:
+        elif self.encoder_type in {"recurrent_tied", "recurrent_untied", "recurrent_partial"}:
             x = RecurrentResidualCore(
                 width=self.network_width,
                 steps=self.recur_steps,
-                tie_weights=self.encoder_type == "recurrent_tied",
+                tie_weights=self.encoder_type != "recurrent_untied",
+                stages=self.recur_stages,
+                variant=self.recur_variant,
+                step_embed_dim=self.recur_step_embed_dim,
                 norm_type=self.norm_type,
                 use_relu=self.use_relu,
                 init_identity=bool(self.recur_init_identity),
                 trunc_bptt=self.recur_trunc_bptt,
+                pre_norm=bool(self.recur_pre_norm),
+                alpha_mode=self.recur_alpha_mode,
+                alpha_init=self.recur_alpha_init,
             )(x, steps=steps)
         else:
             raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
@@ -191,6 +222,12 @@ class G_encoder(nn.Module):
     recur_steps: int = 4
     recur_init_identity: int = 1
     recur_trunc_bptt: int = 0
+    recur_variant: str = "plain"
+    recur_stages: int = 1
+    recur_step_embed_dim: int = 0
+    recur_pre_norm: int = 0
+    recur_alpha_mode: str = "fixed"
+    recur_alpha_init: float = 1.0
     @nn.compact
     def __call__(self, g: jnp.ndarray, steps: Optional[jnp.ndarray] = None):
         lecun_unfirom = variance_scaling(1 / 3, "fan_in", "uniform")
@@ -215,21 +252,30 @@ class G_encoder(nn.Module):
         if self.encoder_type == "untied_resnet":
             num_blocks = self.network_depth // 4
             if num_blocks > 0:
+                alpha = resolve_alpha(self.recur_alpha_mode, self.recur_alpha_init, num_blocks)
                 x = ResidualStack(
                     width=self.network_width,
                     num_blocks=num_blocks,
                     norm_type=self.norm_type,
                     use_relu=self.use_relu,
+                    pre_norm=bool(self.recur_pre_norm),
+                    alpha=alpha,
                 )(x)
-        elif self.encoder_type in {"recurrent_tied", "recurrent_untied"}:
+        elif self.encoder_type in {"recurrent_tied", "recurrent_untied", "recurrent_partial"}:
             x = RecurrentResidualCore(
                 width=self.network_width,
                 steps=self.recur_steps,
-                tie_weights=self.encoder_type == "recurrent_tied",
+                tie_weights=self.encoder_type != "recurrent_untied",
+                stages=self.recur_stages,
+                variant=self.recur_variant,
+                step_embed_dim=self.recur_step_embed_dim,
                 norm_type=self.norm_type,
                 use_relu=self.use_relu,
                 init_identity=bool(self.recur_init_identity),
                 trunc_bptt=self.recur_trunc_bptt,
+                pre_norm=bool(self.recur_pre_norm),
+                alpha_mode=self.recur_alpha_mode,
+                alpha_init=self.recur_alpha_init,
             )(x, steps=steps)
         else:
             raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
@@ -248,6 +294,12 @@ class Actor(nn.Module):
     recur_steps: int = 4
     recur_init_identity: int = 1
     recur_trunc_bptt: int = 0
+    recur_variant: str = "plain"
+    recur_stages: int = 1
+    recur_step_embed_dim: int = 0
+    recur_pre_norm: int = 0
+    recur_alpha_mode: str = "fixed"
+    recur_alpha_init: float = 1.0
     LOG_STD_MAX = 2
     LOG_STD_MIN = -5
 
@@ -274,21 +326,30 @@ class Actor(nn.Module):
         if self.encoder_type == "untied_resnet":
             num_blocks = self.network_depth // 4
             if num_blocks > 0:
+                alpha = resolve_alpha(self.recur_alpha_mode, self.recur_alpha_init, num_blocks)
                 x = ResidualStack(
                     width=self.network_width,
                     num_blocks=num_blocks,
                     norm_type=self.norm_type,
                     use_relu=self.use_relu,
+                    pre_norm=bool(self.recur_pre_norm),
+                    alpha=alpha,
                 )(x)
-        elif self.encoder_type in {"recurrent_tied", "recurrent_untied"}:
+        elif self.encoder_type in {"recurrent_tied", "recurrent_untied", "recurrent_partial"}:
             x = RecurrentResidualCore(
                 width=self.network_width,
                 steps=self.recur_steps,
-                tie_weights=self.encoder_type == "recurrent_tied",
+                tie_weights=self.encoder_type != "recurrent_untied",
+                stages=self.recur_stages,
+                variant=self.recur_variant,
+                step_embed_dim=self.recur_step_embed_dim,
                 norm_type=self.norm_type,
                 use_relu=self.use_relu,
                 init_identity=bool(self.recur_init_identity),
                 trunc_bptt=self.recur_trunc_bptt,
+                pre_norm=bool(self.recur_pre_norm),
+                alpha_mode=self.recur_alpha_mode,
+                alpha_init=self.recur_alpha_init,
             )(x, steps=steps)
         else:
             raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
@@ -636,11 +697,25 @@ if __name__ == "__main__":
         recur_steps=args.recur_steps,
         recur_init_identity=args.recur_init_identity,
         recur_trunc_bptt=args.recur_trunc_bptt,
+        recur_variant=args.recur_variant,
+        recur_stages=args.recur_stages,
+        recur_step_embed_dim=args.recur_step_embed_dim,
+        recur_pre_norm=args.recur_pre_norm,
+        recur_alpha_mode=args.recur_alpha_mode,
+        recur_alpha_init=args.recur_alpha_init,
     )
+    def build_optimizer(lr: float) -> optax.GradientTransformation:
+        if args.grad_clip_norm and args.grad_clip_norm > 0:
+            return optax.chain(
+                optax.clip_by_global_norm(args.grad_clip_norm),
+                optax.adam(learning_rate=lr),
+            )
+        return optax.adam(learning_rate=lr)
+
     actor_state = TrainState.create(
         apply_fn=actor.apply,
         params=actor.init(actor_key, np.ones([1, policy_obs_dim])),
-        tx=optax.adam(learning_rate=args.actor_lr)
+        tx=build_optimizer(args.actor_lr),
     )
 
     # Critic
@@ -653,6 +728,12 @@ if __name__ == "__main__":
         recur_steps=args.recur_steps,
         recur_init_identity=args.recur_init_identity,
         recur_trunc_bptt=args.recur_trunc_bptt,
+        recur_variant=args.recur_variant,
+        recur_stages=args.recur_stages,
+        recur_step_embed_dim=args.recur_step_embed_dim,
+        recur_pre_norm=args.recur_pre_norm,
+        recur_alpha_mode=args.recur_alpha_mode,
+        recur_alpha_init=args.recur_alpha_init,
     )
     sa_encoder_params = sa_encoder.init(sa_key, np.ones([1, args.obs_dim]), np.ones([1, action_size]))
     g_encoder = G_encoder(
@@ -664,6 +745,12 @@ if __name__ == "__main__":
         recur_steps=args.recur_steps,
         recur_init_identity=args.recur_init_identity,
         recur_trunc_bptt=args.recur_trunc_bptt,
+        recur_variant=args.recur_variant,
+        recur_stages=args.recur_stages,
+        recur_step_embed_dim=args.recur_step_embed_dim,
+        recur_pre_norm=args.recur_pre_norm,
+        recur_alpha_mode=args.recur_alpha_mode,
+        recur_alpha_init=args.recur_alpha_init,
     )
     g_encoder_params = g_encoder.init(g_key, np.ones([1, args.goal_end_idx - args.goal_start_idx]))
     
@@ -673,7 +760,7 @@ if __name__ == "__main__":
             "sa_encoder": sa_encoder_params, 
             "g_encoder": g_encoder_params
             },
-        tx=optax.adam(learning_rate=args.critic_lr),
+        tx=build_optimizer(args.critic_lr),
     )
 
     # Entropy coefficient
@@ -682,7 +769,7 @@ if __name__ == "__main__":
     alpha_state = TrainState.create(
         apply_fn=None,
         params={"log_alpha": log_alpha},
-        tx=optax.adam(learning_rate=args.alpha_lr),
+        tx=build_optimizer(args.alpha_lr),
     )
     
     # Trainstate
@@ -741,12 +828,12 @@ if __name__ == "__main__":
 
     def sample_recur_steps(key):
         if args.recur_depth_dropout <= 0:
-            return jnp.asarray(args.recur_steps)
+            return int(args.recur_steps)
         min_steps = max(1, int(args.recur_steps * (1 - args.recur_depth_dropout)))
         return jax.random.randint(key, (), min_steps, args.recur_steps + 1)
 
     def fixed_recur_steps():
-        return jnp.asarray(eval_recur_steps)
+        return int(eval_recur_steps)
 
     def deterministic_actor_step(training_state, env, env_state, extra_fields):
         actor_steps = fixed_recur_steps()
@@ -1174,6 +1261,16 @@ if __name__ == "__main__":
     
 
     training_walltime = 0
+    def count_params(params) -> int:
+        leaves = jax.tree_util.tree_leaves(params)
+        return int(sum(leaf.size for leaf in leaves))
+
+    param_count = (
+        count_params(training_state.actor_state.params)
+        + count_params(training_state.critic_state.params)
+        + count_params(training_state.alpha_state.params)
+    )
+    print(f"param_count: {param_count}", flush=True)
     print('starting training....', flush=True)
     start_time = time.time() 
     for ne in range(args.num_epochs):
@@ -1198,6 +1295,7 @@ if __name__ == "__main__":
         }
 
         metrics = evaluator.run_evaluation(training_state, metrics)
+        metrics["model/param_count"] = param_count
 
         if args.compact_metrics:
             def to_float(value):
@@ -1206,6 +1304,7 @@ if __name__ == "__main__":
                 return float(value)
 
             summary_keys = [
+                "model/param_count",
                 "training/envsteps",
                 "training/sps",
                 "training/walltime",

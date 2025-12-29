@@ -1,0 +1,16 @@
+exp_name: phase1_baseline_d256
+track: false
+capture_vis: false
+checkpoint: true
+
+# Untied baseline depth D=256 (T=64 blocks)
+actor_depth: 256
+critic_depth: 256
+encoder_type: untied_resnet
+recur_apply_to_actor: 0
+recur_apply_to_critic: 0
+
+# Phase 1 stability defaults
+recur_pre_norm: 1
+recur_alpha_mode: scaled
+grad_clip_norm: 1.0
