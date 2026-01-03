@@ -3,6 +3,19 @@ track: false
 capture_vis: false
 checkpoint: true
 
+# Paper-aligned hyperparameters (Table 7).
+# Note: paper uses 100M-400M timesteps depending on task.
+total_env_steps: 100000000
+num_envs: 512
+batch_size: 512
+min_replay_size: 1000
+max_replay_size: 10000
+episode_length: 1000
+num_sgd_batches_per_training_step: 40
+logsumexp_penalty_coeff: 0.1
+actor_lr: 0.0003
+critic_lr: 0.0003
+
 # Tied recursion R1 (FiLM), T=16
 actor_depth: 64
 critic_depth: 64

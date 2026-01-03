@@ -41,6 +41,39 @@ def resolve_alpha(alpha_mode: str, alpha_init: float, steps: int) -> float:
         return float(alpha_init) / float(steps)
     return float(alpha_init)
 
+def create_evaluator(
+    actor_step,
+    eval_env,
+    num_eval_envs: int,
+    episode_length: int,
+    key,
+    print_metrics_keys: bool,
+):
+    try:
+        return CrlEvaluator(
+            actor_step,
+            eval_env,
+            num_eval_envs=num_eval_envs,
+            episode_length=episode_length,
+            key=key,
+            print_metrics_keys=print_metrics_keys,
+        )
+    except TypeError as exc:
+        if "print_metrics_keys" not in str(exc):
+            raise
+        if print_metrics_keys:
+            print(
+                "CrlEvaluator does not support print_metrics_keys; ignoring.",
+                flush=True,
+            )
+        return CrlEvaluator(
+            actor_step,
+            eval_env,
+            num_eval_envs=num_eval_envs,
+            episode_length=episode_length,
+            key=key,
+        )
+
 @dataclass
 class Args:
     exp_name: str = "train"
@@ -56,6 +89,9 @@ class Args:
     capture_vis: bool = True
     vis_length: int = 1000
     checkpoint: bool = True
+    checkpoint_interval: int = 0
+    checkpoint_warmup_epochs: int = 0
+    checkpoint_tail_epochs: int = 0
 
     #environment specific arguments
     env_id: str = "humanoid" # "ant_big_maze" "humanoid_u_maze" "arm_binpick_hard"
@@ -64,6 +100,8 @@ class Args:
     obs_dim: int = 0
     goal_start_idx: int = 0
     goal_end_idx: int = 0
+    goal_dim: int = 0
+    use_goal_from_obs_tail: bool = False
 
     # Algorithm specific arguments
     total_env_steps: int = 100000000 # 50000000
@@ -130,6 +168,8 @@ class Args:
     print_full_metrics: bool = False
     print_eval_metrics_keys: bool = False
     grad_clip_norm: float = 0.0
+    policy_obs_mode: str = "env" # env | state_goal
+    summary_tail_epochs: int = 5
     
     # to be filled in runtime
     env_steps_per_actor_step : int = 0
@@ -482,7 +522,6 @@ if __name__ == "__main__":
                 exclude_current_positions_from_observation=False,
                 terminate_when_unhealthy=True,
             )
-
             args.obs_dim = 29
             args.goal_start_idx = 0
             args.goal_end_idx = 2
@@ -496,7 +535,6 @@ if __name__ == "__main__":
                     terminate_when_unhealthy=True,
                     maze_layout_name=env_id[4:]
                 )
-
                 args.obs_dim = 29
                 args.goal_start_idx = 0
                 args.goal_end_idx = 2
@@ -513,7 +551,6 @@ if __name__ == "__main__":
                     maze_layout_name=maze_layout_name,
                     generalization_config=generalization_config
                 )
-
                 args.obs_dim = 29
                 args.goal_start_idx = 0
                 args.goal_end_idx = 2
@@ -525,7 +562,6 @@ if __name__ == "__main__":
                 exclude_current_positions_from_observation=False,
                 terminate_when_unhealthy=True,
             )
-
             args.obs_dim = 31
             args.goal_start_idx = 28
             args.goal_end_idx = 30
@@ -535,7 +571,6 @@ if __name__ == "__main__":
             env = AntPush(
                 backend="mjx",
             )
-
             args.obs_dim = 31
             args.goal_start_idx = 0
             args.goal_end_idx = 2
@@ -547,7 +582,6 @@ if __name__ == "__main__":
                 exclude_current_positions_from_observation=False,
                 terminate_when_unhealthy=True,
             )
-
             args.obs_dim = 268
             args.goal_start_idx = 0
             args.goal_end_idx = 3
@@ -558,7 +592,6 @@ if __name__ == "__main__":
                 backend="spring",
                 maze_layout_name=env_id[9:]
             )
-
             args.obs_dim = 268
             args.goal_start_idx = 0
             args.goal_end_idx = 3
@@ -569,7 +602,6 @@ if __name__ == "__main__":
             env = ArmReach(
                 backend="mjx",
             )
-
             args.obs_dim = 13
             args.goal_start_idx = 7
             args.goal_end_idx = 10
@@ -579,7 +611,6 @@ if __name__ == "__main__":
             env = ArmBinpickEasy(
                 backend="mjx",
             )
-
             args.obs_dim = 17
             args.goal_start_idx = 0
             args.goal_end_idx = 3
@@ -589,7 +620,6 @@ if __name__ == "__main__":
             env = ArmBinpickHard(
                 backend="mjx",
             )
-
             args.obs_dim = 17
             args.goal_start_idx = 0
             args.goal_end_idx = 3
@@ -599,7 +629,6 @@ if __name__ == "__main__":
             env = ArmBinpickEasyEEF(
                 backend="mjx",
             )
-
             args.obs_dim = 11
             args.goal_start_idx = 0
             args.goal_end_idx = 3
@@ -611,7 +640,6 @@ if __name__ == "__main__":
                 cube_noise_scale=cube_noise_scale,
                 backend="mjx",
             )
-
             args.obs_dim = 23
             args.goal_start_idx = 16
             args.goal_end_idx = 23
@@ -621,7 +649,6 @@ if __name__ == "__main__":
             env = ArmPushEasy(
                 backend="mjx",
             )
-
             args.obs_dim = 17
             args.goal_start_idx = 0
             args.goal_end_idx = 3
@@ -631,7 +658,6 @@ if __name__ == "__main__":
             env = ArmPushHard(
                 backend="mjx",
             )
-
             args.obs_dim = 17
             args.goal_start_idx = 0
             args.goal_end_idx = 3
@@ -641,26 +667,37 @@ if __name__ == "__main__":
             env = SimpleMaze(
                 backend="spring",
             )
-
             args.obs_dim = 6
             args.goal_start_idx = 4
             args.goal_end_idx = 6
 
         else:
             raise NotImplementedError
-        
+
+        args.goal_dim = args.goal_end_idx - args.goal_start_idx
         return env
+
+    def set_goal_indices(env, goal_dim: int) -> None:
+        obs_size = env.observation_size
+        if goal_dim <= 0 or goal_dim > obs_size:
+            raise ValueError(f"Invalid goal_dim={goal_dim} for obs_size={obs_size}")
+        args.goal_dim = goal_dim
+        args.goal_end_idx = obs_size
+        args.goal_start_idx = obs_size - goal_dim
+        args.obs_dim = args.goal_start_idx
         
     env = make_env()
     env = envs.training.wrap(
         env,
         episode_length=args.episode_length,
     )
+    if args.use_goal_from_obs_tail:
+        set_goal_indices(env, args.goal_dim)
 
     obs_size = env.observation_size
     action_size = env.action_size
     goal_dim = args.goal_end_idx - args.goal_start_idx
-    policy_obs_dim = args.obs_dim + goal_dim
+    policy_obs_dim = obs_size if args.policy_obs_mode == "env" else args.obs_dim + goal_dim
     env_keys = jax.random.split(env_key, args.num_envs)
     env_state = jax.jit(env.reset)(env_keys)
     env.step = jax.jit(env.step)
@@ -677,6 +714,8 @@ if __name__ == "__main__":
         eval_env,
         episode_length=args.episode_length,
     )
+    if args.use_goal_from_obs_tail:
+        set_goal_indices(eval_env, args.goal_dim)
     eval_env_keys = jax.random.split(eval_env_key, args.num_envs)
     eval_env_state = jax.jit(eval_env.reset)(eval_env_keys)
     eval_env.step = jax.jit(eval_env.step)
@@ -824,6 +863,13 @@ if __name__ == "__main__":
         policy_obs = jnp.concatenate([state, goal], axis=-1)
         return policy_obs[0] if squeeze else policy_obs
 
+    def policy_input(obs):
+        if args.policy_obs_mode == "env":
+            return obs
+        if args.policy_obs_mode == "state_goal":
+            return build_policy_obs(obs)
+        raise ValueError(f"Unknown policy_obs_mode: {args.policy_obs_mode}")
+
     eval_recur_steps = args.recur_eval_steps if args.recur_eval_steps > 0 else args.recur_steps
 
     def sample_recur_steps(key):
@@ -837,7 +883,7 @@ if __name__ == "__main__":
 
     def deterministic_actor_step(training_state, env, env_state, extra_fields):
         actor_steps = fixed_recur_steps()
-        policy_obs = build_policy_obs(env_state.obs)
+        policy_obs = policy_input(env_state.obs)
         means, _ = actor.apply(training_state.actor_state.params, policy_obs, steps=actor_steps)
         actions = nn.tanh( means )
 
@@ -855,7 +901,7 @@ if __name__ == "__main__":
     def actor_step(training_state, env, env_state, key, extra_fields):
         key, step_key, action_key = jax.random.split(key, 3)
         actor_steps = sample_recur_steps(step_key)
-        policy_obs = build_policy_obs(env_state.obs)
+        policy_obs = policy_input(env_state.obs)
         means, log_stds = actor.apply(training_state.actor_state.params, policy_obs, steps=actor_steps)
         stds = jnp.exp(log_stds)
         actions = nn.tanh( means + stds * jax.random.normal(action_key, shape=means.shape, dtype=means.dtype) )
@@ -877,7 +923,7 @@ if __name__ == "__main__":
         actor_steps = sample_recur_steps(actor_step_key)
         critic_steps = sample_recur_steps(critic_step_key)
         keys = jax.random.split(action_key, K)
-        policy_obs = build_policy_obs(env_state.obs)
+        policy_obs = policy_input(env_state.obs)
         means, log_stds = actor.apply(training_state.actor_state.params, policy_obs, steps=actor_steps)
         stds = jnp.exp(log_stds)
         
@@ -976,11 +1022,10 @@ if __name__ == "__main__":
             transitions
         )
         def actor_loss(actor_params, critic_params, log_alpha, transitions, key):
-            obs = transitions.observation           # expected_shape = batch_size, obs_size + goal_size
+            obs = transitions.observation           # expected_shape = batch_size, obs_dim + goal_dim
             state = obs[:, :args.obs_dim]
-            future_state = transitions.extras["future_state"]
-            goal = future_state[:, args.goal_start_idx : args.goal_end_idx]
-            observation = jnp.concatenate([state, goal], axis=1)
+            goal = obs[:, args.obs_dim:]
+            observation = obs
 
             key, action_key, actor_step_key, critic_step_key = jax.random.split(key, 4)
             actor_steps = sample_recur_steps(actor_step_key)
@@ -1214,7 +1259,7 @@ if __name__ == "__main__":
 
     if args.eval_actor == 0:
         '''Setting up evaluator'''
-        evaluator = CrlEvaluator(
+        evaluator = create_evaluator(
             deterministic_actor_step,
             eval_env,
             num_eval_envs=args.num_eval_envs,
@@ -1225,7 +1270,7 @@ if __name__ == "__main__":
         
     elif args.eval_actor == 1:
         key, eval_actor_key = jax.random.split(key)
-        evaluator = CrlEvaluator(
+        evaluator = create_evaluator(
             lambda training_state, env, env_state, extra_fields: actor_step(
                 training_state,
                 env,
@@ -1242,7 +1287,7 @@ if __name__ == "__main__":
     
     elif args.eval_actor > 1:
         key, eval_actor_key = jax.random.split(key)
-        evaluator = CrlEvaluator(
+        evaluator = create_evaluator(
             # Replace deterministic_actor_step with a partial function of multi_sample_actor_step
             lambda training_state, env, env_state, extra_fields: multi_sample_actor_step(
                 training_state, 
@@ -1296,6 +1341,13 @@ if __name__ == "__main__":
 
         metrics = evaluator.run_evaluation(training_state, metrics)
         metrics["model/param_count"] = param_count
+        if args.episode_length > 0:
+            if "eval/episode_success" in metrics:
+                metrics["eval/success_rate"] = metrics["eval/episode_success"] / args.episode_length
+            if "eval/episode_success_easy" in metrics:
+                metrics["eval/success_easy_rate"] = metrics["eval/episode_success_easy"] / args.episode_length
+            if "eval/episode_success_hard" in metrics:
+                metrics["eval/success_hard_rate"] = metrics["eval/episode_success_hard"] / args.episode_length
 
         if args.compact_metrics:
             def to_float(value):
@@ -1317,9 +1369,10 @@ if __name__ == "__main__":
                 "training/logits_pos",
                 "training/logits_neg",
                 "eval/episode_reward",
-                "eval/episode_success",
-                "eval/episode_success_hard",
-                "eval/episode_success_easy",
+                "eval/success_rate",
+                "eval/success_hard_rate",
+                "eval/success_easy_rate",
+                "eval/episode_success_any",
                 "eval/episode_dist",
                 "eval/episode_distance_from_origin",
                 "eval/epoch_eval_time",
@@ -1332,13 +1385,21 @@ if __name__ == "__main__":
             for key_name in summary_keys:
                 if key_name in metrics:
                     summary[key_name] = to_float(metrics[key_name])
-            print(f"epoch {ne} summary: {summary}", flush=True)
+            if args.summary_tail_epochs <= 0 or ne >= args.num_epochs - args.summary_tail_epochs:
+                print(f"epoch {ne} summary: {summary}", flush=True)
 
         if args.print_full_metrics:
             print(f"epoch {ne} out of {args.num_epochs} complete. metrics: {metrics}", flush=True)
 
         if args.checkpoint:
-            if ne < 5 or ne >= args.num_epochs - 5 or ne % 10 == 0:
+            save_now = False
+            if args.checkpoint_warmup_epochs > 0 and ne < args.checkpoint_warmup_epochs:
+                save_now = True
+            if args.checkpoint_tail_epochs > 0 and ne >= args.num_epochs - args.checkpoint_tail_epochs:
+                save_now = True
+            if args.checkpoint_interval > 0 and ne % args.checkpoint_interval == 0:
+                save_now = True
+            if save_now:
                 # Save current policy and critic params.
                 params = (training_state.alpha_state.params, training_state.actor_state.params, training_state.critic_state.params)
                 path = f"{save_path}/step_{int(training_state.env_steps)}.pkl"
@@ -1367,7 +1428,7 @@ if __name__ == "__main__":
             actor_steps = fixed_recur_steps()
             @jax.jit
             def policy_step(env_state, actor_params):
-                policy_obs = build_policy_obs(env_state.obs)
+                policy_obs = policy_input(env_state.obs)
                 means, _ = actor.apply(actor_params, policy_obs, steps=actor_steps)
                 actions = nn.tanh(means)
                 next_state = env.step(env_state, actions)
