@@ -32,7 +32,8 @@ mkdir -p logs
 mkdir -p results/phase1
 
 # Activate conda environment
-eval "$(conda shell.bash hook)"
+# Initialize conda (adjust path if your conda is installed elsewhere)
+source ~/miniconda3/etc/profile.d/conda.sh
 conda activate recurrent
 
 # Record start time
