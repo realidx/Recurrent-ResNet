@@ -1,15 +1,17 @@
-# For CUDA installs, use:
-#   pip install -r requirements.txt -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# Requirements for GPU server (CUDA 12 + cuDNN 9)
+#
+# Install with:
+#   pip install -r requirements.txt
 
+# Core
 numpy==1.26.4
 scipy==1.12.0
 pyyaml
 
-jax==0.4.23
-jaxlib==0.4.23+cuda12.cudnn89; platform_system == "Linux"
-jaxlib==0.4.23; platform_system != "Linux"
-flax==0.7.4
-optax==0.1.7
+# JAX with CUDA 12 / cuDNN 9 support
+jax[cuda12]==0.4.30
+flax==0.8.5
+optax==0.2.2
 chex==0.1.86
 etils==1.13.0
 ml-collections==1.1.0
@@ -17,14 +19,18 @@ jaxopt==0.8.5
 orbax-checkpoint==0.5.16
 tensorstore==0.1.78
 
-brax==0.10.1
-mujoco==3.2.6
-mujoco-mjx==3.2.6
+# Brax / MuJoCo
+# Using brax 0.12.1 which is compatible with:
+# - JAX 0.4.30 + cuDNN 9
+# - Newer mujoco-mjx API (ncon fix included)
+brax==0.12.1
+mujoco==3.2.3
+mujoco-mjx==3.2.3
 mediapy==1.2.2
 gym==0.26.2
 
-wandb==0.17.9
-wandb-osh==1.2.2
+# Logging
+wandb
+wandb-osh
 tyro
-
-tensorboardX==2.6.4
+tensorboardX
