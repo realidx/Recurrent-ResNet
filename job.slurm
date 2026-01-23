@@ -86,7 +86,25 @@ echo "=============================================="
 D4_LOG="logs/phase1_d4_${SLURM_JOB_ID:-local}.log"
 
 python scripts/crl_train.py \
-    --config configs/crl/phase1_baseline_d4.yaml \
+    --exp-name phase1_baseline_d4 \
+    --no-track \
+    --no-capture-vis \
+    --checkpoint \
+    --total-env-steps 100000000 \
+    --num-envs 512 \
+    --batch-size 512 \
+    --min-replay-size 1000 \
+    --max-replay-size 10000 \
+    --episode-length 1000 \
+    --num-sgd-batches-per-training-step 40 \
+    --logsumexp-penalty-coeff 0.1 \
+    --actor-lr 0.0003 \
+    --critic-lr 0.0003 \
+    --actor-depth 4 \
+    --critic-depth 4 \
+    --encoder-type untied_resnet \
+    --recur-apply-to-actor 0 \
+    --recur-apply-to-critic 0 \
     --env-id $ENV_ID \
     --eval-env-id $EVAL_ENV_ID \
     --seed $SEED \
@@ -108,7 +126,25 @@ echo "=============================================="
 D16_LOG="logs/phase1_d16_${SLURM_JOB_ID:-local}.log"
 
 python scripts/crl_train.py \
-    --config configs/crl/phase1_baseline_d16.yaml \
+    --exp-name phase1_baseline_d16 \
+    --no-track \
+    --no-capture-vis \
+    --checkpoint \
+    --total-env-steps 100000000 \
+    --num-envs 512 \
+    --batch-size 512 \
+    --min-replay-size 1000 \
+    --max-replay-size 10000 \
+    --episode-length 1000 \
+    --num-sgd-batches-per-training-step 40 \
+    --logsumexp-penalty-coeff 0.1 \
+    --actor-lr 0.0003 \
+    --critic-lr 0.0003 \
+    --actor-depth 16 \
+    --critic-depth 16 \
+    --encoder-type untied_resnet \
+    --recur-apply-to-actor 0 \
+    --recur-apply-to-critic 0 \
     --env-id $ENV_ID \
     --eval-env-id $EVAL_ENV_ID \
     --seed $SEED \
@@ -130,7 +166,25 @@ echo "=============================================="
 D64_LOG="logs/phase1_d64_${SLURM_JOB_ID:-local}.log"
 
 python scripts/crl_train.py \
-    --config configs/crl/phase1_baseline_d64.yaml \
+    --exp-name phase1_baseline_d64 \
+    --no-track \
+    --no-capture-vis \
+    --checkpoint \
+    --total-env-steps 100000000 \
+    --num-envs 512 \
+    --batch-size 512 \
+    --min-replay-size 1000 \
+    --max-replay-size 10000 \
+    --episode-length 1000 \
+    --num-sgd-batches-per-training-step 40 \
+    --logsumexp-penalty-coeff 0.1 \
+    --actor-lr 0.0003 \
+    --critic-lr 0.0003 \
+    --actor-depth 64 \
+    --critic-depth 64 \
+    --encoder-type untied_resnet \
+    --recur-apply-to-actor 0 \
+    --recur-apply-to-critic 0 \
     --env-id $ENV_ID \
     --eval-env-id $EVAL_ENV_ID \
     --seed $SEED \
