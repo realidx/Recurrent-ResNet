@@ -1,4 +1,4 @@
-exp_name: phase1_r3_partial_t64
+exp_name: phase1_baseline_d16
 track: false
 capture_vis: false
 checkpoint: true
@@ -16,17 +16,9 @@ logsumexp_penalty_coeff: 0.1
 actor_lr: 0.0003
 critic_lr: 0.0003
 
-# Partial untying (K=4 stages), T=64
-actor_depth: 256
-critic_depth: 256
-encoder_type: recurrent_partial
-recur_steps: 64
-recur_stages: 4
-recur_variant: plain
-recur_apply_to_actor: 1
-recur_apply_to_critic: 1
-
-# Phase 1 stability defaults
-recur_pre_norm: 1
-recur_alpha_mode: scaled
-grad_clip_norm: 1.0
+# Untied baseline depth D=16 (T=4 blocks)
+actor_depth: 16
+critic_depth: 16
+encoder_type: untied_resnet
+recur_apply_to_actor: 0
+recur_apply_to_critic: 0
