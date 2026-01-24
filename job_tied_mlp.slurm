@@ -99,6 +99,8 @@ COMMON_ARGS="--no-track \
     --actor-lr 0.0003 \
     --critic-lr 0.0003 \
     --encoder-type tied_mlp \
+    --recur-apply-to-actor 1 \
+    --recur-apply-to-critic 1 \
     --env-id $ENV_ID \
     --eval-env-id $EVAL_ENV_ID \
     --seed $SEED \
@@ -125,6 +127,8 @@ python scripts/crl_train.py \
     --exp-name phase2_loop1 \
     $COMMON_ARGS \
     $TIED_MLP_ARGS \
+    --recur-steps 4 \
+    --recur-eval-steps 4 \
     --tied-mlp-blocks 1 \
     --tied-mlp-iters 4 \
     2>&1 | tee $LOOP1_LOG
@@ -146,6 +150,8 @@ python scripts/crl_train.py \
     --exp-name phase2_loop2 \
     $COMMON_ARGS \
     $TIED_MLP_ARGS \
+    --recur-steps 4 \
+    --recur-eval-steps 4 \
     --tied-mlp-blocks 2 \
     --tied-mlp-iters 2 \
     2>&1 | tee $LOOP2_LOG
@@ -167,6 +173,8 @@ python scripts/crl_train.py \
     --exp-name phase2_loop4 \
     $COMMON_ARGS \
     $TIED_MLP_ARGS \
+    --recur-steps 4 \
+    --recur-eval-steps 4 \
     --tied-mlp-blocks 4 \
     --tied-mlp-iters 1 \
     2>&1 | tee $LOOP4_LOG
