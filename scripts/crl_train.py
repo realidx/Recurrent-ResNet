@@ -142,7 +142,15 @@ class Args:
     recur_pre_norm: int = 0
     recur_alpha_mode: str = "fixed" # fixed | scaled | learned
     recur_alpha_init: float = 1.0
-    
+
+    # Tied MLP specific arguments
+    tied_mlp_blocks: int = 1  # Number of distinct blocks (L)
+    tied_mlp_iters: int = 4   # Number of iterations (K), total steps = L * K
+    tied_mlp_ffn_mult: float = 2.667  # FFN expansion multiplier (8/3 for SwiGLU)
+    tied_mlp_layerscale_init: float = 0.01  # LayerScale initialization
+    tied_mlp_step_embed_dim: int = 0  # Step embedding dim (0 = use width)
+    tied_mlp_trunc_bptt: int = 0  # Truncated BPTT window (0 = disabled)
+
     num_episodes_per_env: int = 1 #recommended to keep at 1
     training_steps_multiplier: int = 1 #recommended to keep at 1
     use_all_batches: int = 0 # recommended to keep at 0
@@ -197,6 +205,13 @@ class SA_encoder(nn.Module):
     recur_pre_norm: int = 0
     recur_alpha_mode: str = "fixed"
     recur_alpha_init: float = 1.0
+    # Tied MLP params
+    tied_mlp_blocks: int = 1
+    tied_mlp_iters: int = 4
+    tied_mlp_ffn_mult: float = 2.667
+    tied_mlp_layerscale_init: float = 0.01
+    tied_mlp_step_embed_dim: int = 0
+    tied_mlp_trunc_bptt: int = 0
     @nn.compact
     def __call__(self, s: jnp.ndarray, a: jnp.ndarray, steps: Optional[jnp.ndarray] = None):
         lecun_unfirom = variance_scaling(1 / 3, "fan_in", "uniform")
@@ -246,12 +261,23 @@ class SA_encoder(nn.Module):
                 alpha_mode=self.recur_alpha_mode,
                 alpha_init=self.recur_alpha_init,
             )(x, steps=steps)
+        elif self.encoder_type == "tied_mlp":
+            from recurrent_resnet.jax.tied_mlp import TiedMLP
+            x = TiedMLP(
+                width=self.network_width,
+                num_blocks=self.tied_mlp_blocks,
+                num_iters=self.tied_mlp_iters,
+                ffn_mult=self.tied_mlp_ffn_mult,
+                layerscale_init=self.tied_mlp_layerscale_init,
+                step_embed_dim=self.tied_mlp_step_embed_dim,
+                trunc_bptt=self.tied_mlp_trunc_bptt,
+            )(x, steps=steps)
         else:
             raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
         # Final layer
         x = nn.Dense(64, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
         return x
-    
+
 class G_encoder(nn.Module):
     norm_type = "layer_norm"
     network_width: int = 1024
@@ -268,6 +294,13 @@ class G_encoder(nn.Module):
     recur_pre_norm: int = 0
     recur_alpha_mode: str = "fixed"
     recur_alpha_init: float = 1.0
+    # Tied MLP params
+    tied_mlp_blocks: int = 1
+    tied_mlp_iters: int = 4
+    tied_mlp_ffn_mult: float = 2.667
+    tied_mlp_layerscale_init: float = 0.01
+    tied_mlp_step_embed_dim: int = 0
+    tied_mlp_trunc_bptt: int = 0
     @nn.compact
     def __call__(self, g: jnp.ndarray, steps: Optional[jnp.ndarray] = None):
         lecun_unfirom = variance_scaling(1 / 3, "fan_in", "uniform")
@@ -317,12 +350,23 @@ class G_encoder(nn.Module):
                 alpha_mode=self.recur_alpha_mode,
                 alpha_init=self.recur_alpha_init,
             )(x, steps=steps)
+        elif self.encoder_type == "tied_mlp":
+            from recurrent_resnet.jax.tied_mlp import TiedMLP
+            x = TiedMLP(
+                width=self.network_width,
+                num_blocks=self.tied_mlp_blocks,
+                num_iters=self.tied_mlp_iters,
+                ffn_mult=self.tied_mlp_ffn_mult,
+                layerscale_init=self.tied_mlp_layerscale_init,
+                step_embed_dim=self.tied_mlp_step_embed_dim,
+                trunc_bptt=self.tied_mlp_trunc_bptt,
+            )(x, steps=steps)
         else:
             raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
         # Final layer
         x = nn.Dense(64, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
         return x
-  
+
 class Actor(nn.Module):
     action_size: int
     norm_type = "layer_norm"
@@ -340,6 +384,13 @@ class Actor(nn.Module):
     recur_pre_norm: int = 0
     recur_alpha_mode: str = "fixed"
     recur_alpha_init: float = 1.0
+    # Tied MLP params
+    tied_mlp_blocks: int = 1
+    tied_mlp_iters: int = 4
+    tied_mlp_ffn_mult: float = 2.667
+    tied_mlp_layerscale_init: float = 0.01
+    tied_mlp_step_embed_dim: int = 0
+    tied_mlp_trunc_bptt: int = 0
     LOG_STD_MAX = 2
     LOG_STD_MIN = -5
 
@@ -390,6 +441,17 @@ class Actor(nn.Module):
                 pre_norm=bool(self.recur_pre_norm),
                 alpha_mode=self.recur_alpha_mode,
                 alpha_init=self.recur_alpha_init,
+            )(x, steps=steps)
+        elif self.encoder_type == "tied_mlp":
+            from recurrent_resnet.jax.tied_mlp import TiedMLP
+            x = TiedMLP(
+                width=self.network_width,
+                num_blocks=self.tied_mlp_blocks,
+                num_iters=self.tied_mlp_iters,
+                ffn_mult=self.tied_mlp_ffn_mult,
+                layerscale_init=self.tied_mlp_layerscale_init,
+                step_embed_dim=self.tied_mlp_step_embed_dim,
+                trunc_bptt=self.tied_mlp_trunc_bptt,
             )(x, steps=steps)
         else:
             raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
@@ -742,6 +804,12 @@ if __name__ == "__main__":
         recur_pre_norm=args.recur_pre_norm,
         recur_alpha_mode=args.recur_alpha_mode,
         recur_alpha_init=args.recur_alpha_init,
+        tied_mlp_blocks=args.tied_mlp_blocks,
+        tied_mlp_iters=args.tied_mlp_iters,
+        tied_mlp_ffn_mult=args.tied_mlp_ffn_mult,
+        tied_mlp_layerscale_init=args.tied_mlp_layerscale_init,
+        tied_mlp_step_embed_dim=args.tied_mlp_step_embed_dim,
+        tied_mlp_trunc_bptt=args.tied_mlp_trunc_bptt,
     )
     def build_optimizer(lr: float) -> optax.GradientTransformation:
         if args.grad_clip_norm and args.grad_clip_norm > 0:
@@ -773,6 +841,12 @@ if __name__ == "__main__":
         recur_pre_norm=args.recur_pre_norm,
         recur_alpha_mode=args.recur_alpha_mode,
         recur_alpha_init=args.recur_alpha_init,
+        tied_mlp_blocks=args.tied_mlp_blocks,
+        tied_mlp_iters=args.tied_mlp_iters,
+        tied_mlp_ffn_mult=args.tied_mlp_ffn_mult,
+        tied_mlp_layerscale_init=args.tied_mlp_layerscale_init,
+        tied_mlp_step_embed_dim=args.tied_mlp_step_embed_dim,
+        tied_mlp_trunc_bptt=args.tied_mlp_trunc_bptt,
     )
     sa_encoder_params = sa_encoder.init(sa_key, np.ones([1, args.obs_dim]), np.ones([1, action_size]))
     g_encoder = G_encoder(
@@ -790,6 +864,12 @@ if __name__ == "__main__":
         recur_pre_norm=args.recur_pre_norm,
         recur_alpha_mode=args.recur_alpha_mode,
         recur_alpha_init=args.recur_alpha_init,
+        tied_mlp_blocks=args.tied_mlp_blocks,
+        tied_mlp_iters=args.tied_mlp_iters,
+        tied_mlp_ffn_mult=args.tied_mlp_ffn_mult,
+        tied_mlp_layerscale_init=args.tied_mlp_layerscale_init,
+        tied_mlp_step_embed_dim=args.tied_mlp_step_embed_dim,
+        tied_mlp_trunc_bptt=args.tied_mlp_trunc_bptt,
     )
     g_encoder_params = g_encoder.init(g_key, np.ones([1, args.goal_end_idx - args.goal_start_idx]))
     

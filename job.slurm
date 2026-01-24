@@ -92,7 +92,7 @@ python scripts/crl_train.py \
     --checkpoint \
     --total-env-steps 100000000 \
     --num-envs 512 \
-    --batch-size 512 \
+    --batch-size 256 \
     --min-replay-size 1000 \
     --max-replay-size 10000 \
     --episode-length 1000 \
@@ -172,7 +172,7 @@ python scripts/crl_train.py \
     --checkpoint \
     --total-env-steps 100000000 \
     --num-envs 512 \
-    --batch-size 512 \
+    --batch-size 1024 \
     --min-replay-size 1000 \
     --max-replay-size 10000 \
     --episode-length 1000 \
