@@ -92,6 +92,9 @@ class Args:
     checkpoint_interval: int = 0
     checkpoint_warmup_epochs: int = 0
     checkpoint_tail_epochs: int = 0
+    print_args: bool = True
+    log_flush: bool = True
+    time_print_interval_epochs: int = 1
 
     #environment specific arguments
     env_id: str = "humanoid" # "ant_big_maze" "humanoid_u_maze" "arm_binpick_hard"
@@ -150,6 +153,19 @@ class Args:
     tied_mlp_layerscale_init: float = 0.01  # LayerScale initialization
     tied_mlp_step_embed_dim: int = 0  # Step embedding dim (0 = use width)
     tied_mlp_trunc_bptt: int = 0  # Truncated BPTT window (0 = disabled)
+
+    # Optional overrides to use different TiedMLP shapes for actor vs critic.
+    # If 0, falls back to tied_mlp_blocks / tied_mlp_iters.
+    actor_tied_mlp_blocks: int = 0
+    actor_tied_mlp_iters: int = 0
+    critic_tied_mlp_blocks: int = 0
+    critic_tied_mlp_iters: int = 0
+
+    # Optional overrides to use different recurrent step counts for actor vs critic.
+    # If 0, falls back to recur_steps / recur_eval_steps.
+    actor_recur_steps: int = 0
+    actor_recur_eval_steps: int = 0
+    critic_recur_steps: int = 0
 
     num_episodes_per_env: int = 1 #recommended to keep at 1
     training_steps_multiplier: int = 1 #recommended to keep at 1
@@ -496,23 +512,27 @@ if __name__ == "__main__":
 
     args = tyro.cli(Args)
     
-    # Print every arg
-    print("Arguments:", flush=True)
-    for arg, value in vars(args).items():
-        print(f"{arg}: {value}", flush=True)
-    print("\n", flush=True)
+    if args.print_args:
+        print("Arguments:", flush=args.log_flush)
+        for arg, value in vars(args).items():
+            print(f"{arg}: {value}", flush=args.log_flush)
+        print("\n", flush=args.log_flush)
 
     args.env_steps_per_actor_step = args.num_envs * args.unroll_length
-    print(f"env_steps_per_actor_step: {args.env_steps_per_actor_step}", flush=True)
+    if args.print_args:
+        print(f"env_steps_per_actor_step: {args.env_steps_per_actor_step}", flush=args.log_flush)
 
     args.num_prefill_env_steps = args.min_replay_size * args.num_envs
-    print(f"num_prefill_env_steps: {args.num_prefill_env_steps}", flush=True)
+    if args.print_args:
+        print(f"num_prefill_env_steps: {args.num_prefill_env_steps}", flush=args.log_flush)
 
     args.num_prefill_actor_steps = np.ceil(args.min_replay_size / args.unroll_length)
-    print(f"num_prefill_actor_steps: {args.num_prefill_actor_steps}", flush=True)
+    if args.print_args:
+        print(f"num_prefill_actor_steps: {args.num_prefill_actor_steps}", flush=args.log_flush)
 
     args.num_training_steps_per_epoch = (args.total_env_steps - args.num_prefill_env_steps) // (args.num_epochs * args.env_steps_per_actor_step)
-    print(f"num_training_steps_per_epoch: {args.num_training_steps_per_epoch}", flush=True)
+    if args.print_args:
+        print(f"num_training_steps_per_epoch: {args.num_training_steps_per_epoch}", flush=args.log_flush)
     
     run_name = (
         f"{args.env_id}{'_' + args.eval_env_id if args.eval_env_id else ''}_"
@@ -524,7 +544,8 @@ if __name__ == "__main__":
         f"recA:{args.recur_apply_to_actor}_recC:{args.recur_apply_to_critic}_"
         f"{args.seed}"
     )
-    print(f"run_name: {run_name}", flush=True)
+    if args.print_args:
+        print(f"run_name: {run_name}", flush=args.log_flush)
     
     if args.track:
 
@@ -560,7 +581,8 @@ if __name__ == "__main__":
     key, buffer_key, env_key, eval_env_key, actor_key, sa_key, g_key = jax.random.split(key, 7)
 
     def make_env(env_id=args.env_id):
-        print(f"making env with env_id: {env_id}", flush=True)
+        if args.print_args:
+            print(f"making env with env_id: {env_id}", flush=args.log_flush)
         if env_id == "reacher":
             from envs.reacher import Reacher
             env = Reacher(
@@ -605,7 +627,11 @@ if __name__ == "__main__":
                 gen_idx = env_id.find("gen")
                 maze_layout_name = env_id[4:gen_idx-1]
                 generalization_config = env_id[gen_idx+4:]
-                print(f"maze_layout_name: {maze_layout_name}, generalization_config: {generalization_config}", flush=True)
+                if args.print_args:
+                    print(
+                        f"maze_layout_name: {maze_layout_name}, generalization_config: {generalization_config}",
+                        flush=args.log_flush,
+                    )
                 env = AntMazeGeneralization(
                     backend="spring",
                     exclude_current_positions_from_observation=False,
@@ -764,7 +790,8 @@ if __name__ == "__main__":
     env_state = jax.jit(env.reset)(env_keys)
     env.step = jax.jit(env.step)
     
-    print(f"obs_size: {obs_size}, action_size: {action_size}", flush=True)
+    if args.print_args:
+        print(f"obs_size: {obs_size}, action_size: {action_size}", flush=args.log_flush)
     
     
     if not args.eval_env_id:
@@ -788,6 +815,8 @@ if __name__ == "__main__":
     critic_encoder_type = args.encoder_type if args.recur_apply_to_critic else "untied_resnet"
 
     # Actor
+    actor_tied_mlp_blocks = args.actor_tied_mlp_blocks or args.tied_mlp_blocks
+    actor_tied_mlp_iters = args.actor_tied_mlp_iters or args.tied_mlp_iters
     actor = Actor(
         action_size=action_size,
         network_width=args.actor_network_width,
@@ -804,8 +833,8 @@ if __name__ == "__main__":
         recur_pre_norm=args.recur_pre_norm,
         recur_alpha_mode=args.recur_alpha_mode,
         recur_alpha_init=args.recur_alpha_init,
-        tied_mlp_blocks=args.tied_mlp_blocks,
-        tied_mlp_iters=args.tied_mlp_iters,
+        tied_mlp_blocks=actor_tied_mlp_blocks,
+        tied_mlp_iters=actor_tied_mlp_iters,
         tied_mlp_ffn_mult=args.tied_mlp_ffn_mult,
         tied_mlp_layerscale_init=args.tied_mlp_layerscale_init,
         tied_mlp_step_embed_dim=args.tied_mlp_step_embed_dim,
@@ -826,6 +855,8 @@ if __name__ == "__main__":
     )
 
     # Critic
+    critic_tied_mlp_blocks = args.critic_tied_mlp_blocks or args.tied_mlp_blocks
+    critic_tied_mlp_iters = args.critic_tied_mlp_iters or args.tied_mlp_iters
     sa_encoder = SA_encoder(
         network_width=args.critic_network_width,
         network_depth=args.critic_depth,
@@ -841,8 +872,8 @@ if __name__ == "__main__":
         recur_pre_norm=args.recur_pre_norm,
         recur_alpha_mode=args.recur_alpha_mode,
         recur_alpha_init=args.recur_alpha_init,
-        tied_mlp_blocks=args.tied_mlp_blocks,
-        tied_mlp_iters=args.tied_mlp_iters,
+        tied_mlp_blocks=critic_tied_mlp_blocks,
+        tied_mlp_iters=critic_tied_mlp_iters,
         tied_mlp_ffn_mult=args.tied_mlp_ffn_mult,
         tied_mlp_layerscale_init=args.tied_mlp_layerscale_init,
         tied_mlp_step_embed_dim=args.tied_mlp_step_embed_dim,
@@ -864,8 +895,8 @@ if __name__ == "__main__":
         recur_pre_norm=args.recur_pre_norm,
         recur_alpha_mode=args.recur_alpha_mode,
         recur_alpha_init=args.recur_alpha_init,
-        tied_mlp_blocks=args.tied_mlp_blocks,
-        tied_mlp_iters=args.tied_mlp_iters,
+        tied_mlp_blocks=critic_tied_mlp_blocks,
+        tied_mlp_iters=critic_tied_mlp_iters,
         tied_mlp_ffn_mult=args.tied_mlp_ffn_mult,
         tied_mlp_layerscale_init=args.tied_mlp_layerscale_init,
         tied_mlp_step_embed_dim=args.tied_mlp_step_embed_dim,
@@ -952,17 +983,31 @@ if __name__ == "__main__":
 
     eval_recur_steps = args.recur_eval_steps if args.recur_eval_steps > 0 else args.recur_steps
 
-    def sample_recur_steps(key):
-        if args.recur_depth_dropout <= 0:
-            return int(args.recur_steps)
-        min_steps = max(1, int(args.recur_steps * (1 - args.recur_depth_dropout)))
-        return jax.random.randint(key, (), min_steps, args.recur_steps + 1)
+    actor_train_steps = int(args.actor_recur_steps) if args.actor_recur_steps > 0 else int(args.recur_steps)
+    critic_train_steps = int(args.critic_recur_steps) if args.critic_recur_steps > 0 else int(args.recur_steps)
+    actor_eval_steps = (
+        int(args.actor_recur_eval_steps)
+        if args.actor_recur_eval_steps > 0
+        else int(eval_recur_steps)
+    )
 
-    def fixed_recur_steps():
-        return int(eval_recur_steps)
+    def sample_actor_recur_steps(key):
+        if args.recur_depth_dropout <= 0:
+            return int(actor_train_steps)
+        min_steps = max(1, int(actor_train_steps * (1 - args.recur_depth_dropout)))
+        return jax.random.randint(key, (), min_steps, actor_train_steps + 1)
+
+    def sample_critic_recur_steps(key):
+        if args.recur_depth_dropout <= 0:
+            return int(critic_train_steps)
+        min_steps = max(1, int(critic_train_steps * (1 - args.recur_depth_dropout)))
+        return jax.random.randint(key, (), min_steps, critic_train_steps + 1)
+
+    def fixed_actor_recur_steps():
+        return int(actor_eval_steps)
 
     def deterministic_actor_step(training_state, env, env_state, extra_fields):
-        actor_steps = fixed_recur_steps()
+        actor_steps = fixed_actor_recur_steps()
         policy_obs = policy_input(env_state.obs)
         means, _ = actor.apply(training_state.actor_state.params, policy_obs, steps=actor_steps)
         actions = nn.tanh( means )
@@ -980,7 +1025,7 @@ if __name__ == "__main__":
     
     def actor_step(training_state, env, env_state, key, extra_fields):
         key, step_key, action_key = jax.random.split(key, 3)
-        actor_steps = sample_recur_steps(step_key)
+        actor_steps = sample_actor_recur_steps(step_key)
         policy_obs = policy_input(env_state.obs)
         means, log_stds = actor.apply(training_state.actor_state.params, policy_obs, steps=actor_steps)
         stds = jnp.exp(log_stds)
@@ -1108,8 +1153,8 @@ if __name__ == "__main__":
             observation = obs
 
             key, action_key, actor_step_key, critic_step_key = jax.random.split(key, 4)
-            actor_steps = sample_recur_steps(actor_step_key)
-            critic_steps = sample_recur_steps(critic_step_key)
+            actor_steps = sample_actor_recur_steps(actor_step_key)
+            critic_steps = sample_critic_recur_steps(critic_step_key)
 
             means, log_stds = actor.apply(actor_params, observation, steps=actor_steps)
             stds = jnp.exp(log_stds)
@@ -1167,7 +1212,7 @@ if __name__ == "__main__":
             obs = transitions.observation[:, :args.obs_dim]
             action = transitions.action
             
-            critic_steps = sample_recur_steps(key)
+            critic_steps = sample_critic_recur_steps(key)
             sa_repr = sa_encoder.apply(sa_encoder_params, obs, action, steps=critic_steps)
             g_repr = g_encoder.apply(
                 g_encoder_params,
@@ -1466,10 +1511,10 @@ if __name__ == "__main__":
                 if key_name in metrics:
                     summary[key_name] = to_float(metrics[key_name])
             if args.summary_tail_epochs <= 0 or ne >= args.num_epochs - args.summary_tail_epochs:
-                print(f"epoch {ne} summary: {summary}", flush=True)
+                print(f"epoch {ne} summary: {summary}", flush=args.log_flush)
 
         if args.print_full_metrics:
-            print(f"epoch {ne} out of {args.num_epochs} complete. metrics: {metrics}", flush=True)
+            print(f"epoch {ne} out of {args.num_epochs} complete. metrics: {metrics}", flush=args.log_flush)
 
         if args.checkpoint:
             save_now = False
@@ -1492,7 +1537,10 @@ if __name__ == "__main__":
                 trigger_sync()
         
         hours_passed = (time.time() - start_time) / 3600
-        print(f"Time elapsed: {hours_passed:.3f} hours", flush=True)
+        if args.time_print_interval_epochs > 0:
+            is_last_epoch = ne == args.num_epochs - 1
+            if is_last_epoch or (ne % args.time_print_interval_epochs == 0):
+                print(f"Time elapsed: {hours_passed:.3f} hours", flush=args.log_flush)
 
     
     if args.checkpoint:
@@ -1532,22 +1580,25 @@ if __name__ == "__main__":
                 f.write(html_string)
             wandb.log({"vis": wandb.Html(html_string)})
             
-        print("Rendering final policy...", flush=True)
+        print("Rendering final policy...", flush=args.log_flush)
         try:
             render_policy(training_state, save_path)
         except Exception as e:
-            print(f"Error rendering final policy: {e}", flush=True)
+            print(f"Error rendering final policy: {e}", flush=args.log_flush)
         
     #After training is complete, save the Args
     if args.checkpoint:
         with open(f"{save_path}/args.pkl", 'wb') as f:
             pickle.dump(args, f)
-        print(f"Saved args to {save_path}/args.pkl", flush=True)
+        print(f"Saved args to {save_path}/args.pkl", flush=args.log_flush)
         
     #After training is complete, save the replay buffer (if save_buffer is 1, this takes a lot of memory)
     if args.checkpoint:
         if args.save_buffer:
-            print("Saving final buffer_state and buffer data (everything needed to recreate replay_buffer)...", flush=True)
+            print(
+                "Saving final buffer_state and buffer data (everything needed to recreate replay_buffer)...",
+                flush=args.log_flush,
+            )
             try:
                 buffer_path = f"{save_path}/final_buffer.pkl"
                 buffer_data = {
@@ -1559,6 +1610,6 @@ if __name__ == "__main__":
                 }
                 with open(buffer_path, 'wb') as f:
                     pickle.dump(buffer_data, f)
-                print(f"Saved replay_buffer to {buffer_path}", flush=True)
+                print(f"Saved replay_buffer to {buffer_path}", flush=args.log_flush)
             except Exception as e:
-                print(f"Error saving final replay buffer: {e}", flush=True)
+                print(f"Error saving final replay buffer: {e}", flush=args.log_flush)
