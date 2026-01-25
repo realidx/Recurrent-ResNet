@@ -49,7 +49,7 @@ echo "=============================================="
 
 ENV_ID="ant_u4_maze_gen_1f2f3f"
 EVAL_ENV_ID="ant_u4_maze"
-SEEDS=(1000 1001 1002)
+SEEDS=(1000)
 
 RAW_RESULTS_FILE="results/phase2/critic_partial_${SLURM_JOB_ID:-local}_raw.csv"
 RESULTS_FILE="results/phase2/critic_partial_${SLURM_JOB_ID:-local}.csv"
