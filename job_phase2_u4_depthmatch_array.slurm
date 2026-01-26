@@ -30,7 +30,10 @@ conda activate recurrent
 
 export WANDB_MODE=disabled
 export WANDB_DIR="${SLURM_TMPDIR:-/tmp}"
-export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_deterministic_reductions"
+# Note: XLA determinism flags are version-dependent. Some clusters error out on
+# unknown flags (fatal). If your XLA supports determinism, set it explicitly at
+# submission time, e.g.:
+#   sbatch --export=ALL,XLA_FLAGS="--xla_gpu_deterministic_ops" ...
 
 ENV_ID="ant_u4_maze"
 EVAL_ENV_ID="ant_u4_maze"
