@@ -11,7 +11,7 @@
 #SBATCH --partition=gpu
 #
 # Usage:
-#   sbatch --array=0-17 job_phase2_u4_depthmatch_array.slurm
+#   sbatch --array=0-14 job_phase2_u4_depthmatch_array.slurm
 #   sbatch --array=0-17%6 job_phase2_u4_depthmatch_array.slurm            # throttle
 #
 # Optional (pin a GPU type; pick one your cluster supports):
@@ -94,20 +94,13 @@ case "$cfg_idx" in
       --encoder-type untied_resnet --recur-apply-to-actor 0 --recur-apply-to-critic 0 --actor-depth 64 --critic-depth 64)
     ;;
   3)
-    NAME="u4_tiedcritic_d16_C1x4"
-    CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
-      --actor-depth 16 --critic-depth 16 \
-      --encoder-type tied_mlp --recur-apply-to-actor 0 --recur-apply-to-critic 1 \
-      --critic-recur-steps 4 $TIED_MLP_ARGS --critic-tied-mlp-blocks 1 --critic-tied-mlp-iters 4)
-    ;;
-  4)
     NAME="u4_tiedcritic_d32_C2x4"
     CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
       --actor-depth 32 --critic-depth 32 \
       --encoder-type tied_mlp --recur-apply-to-actor 0 --recur-apply-to-critic 1 \
       --critic-recur-steps 8 $TIED_MLP_ARGS --critic-tied-mlp-blocks 2 --critic-tied-mlp-iters 4)
     ;;
-  5)
+  4)
     NAME="u4_tiedcritic_d64_C4x4"
     CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
       --actor-depth 64 --critic-depth 64 \
