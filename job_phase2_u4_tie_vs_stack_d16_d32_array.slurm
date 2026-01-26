@@ -26,7 +26,8 @@
 set -e
 
 mkdir -p logs
-mkdir -p results/phase2/array_u4_tievsstack
+OUT_DIR="results/phase2/array_u4_tievsstack/${SLURM_JOB_ID:-local}"
+mkdir -p "$OUT_DIR"
 
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate recurrent
@@ -118,7 +119,7 @@ NODE="$(hostname)"
 GPU_NAME="$(command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader | head -1 || echo N/A)"
 
 LOG="logs/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.log"
-OUT="results/phase2/array_u4_tievsstack/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.csv"
+OUT="${OUT_DIR}/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.csv"
 echo "config,seed,node,gpu_name,actor_depth,critic_blocks,critic_iters,critic_steps,env_steps,success_rate,success_any,param_count,eval_reward,training_time_hours" > "$OUT"
 
 echo "[$(date +%H:%M:%S)] Running $NAME on 1 GPU..."

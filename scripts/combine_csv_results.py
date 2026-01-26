@@ -50,6 +50,12 @@ def parse_args() -> argparse.Namespace:
         default="config",
         help="Comma-separated group columns for --aggregate (default: config).",
     )
+    parser.add_argument(
+        "--include-seeds",
+        type=str,
+        default="",
+        help="Comma-separated seed list to include (e.g. 1001,1003,1004). Default: include all.",
+    )
     return parser.parse_args()
 
 
@@ -105,6 +111,12 @@ def main() -> None:
     # Normalize to union header.
     normalized = [{k: r.get(k, "") for k in all_fieldnames} for r in all_rows]
 
+    include_seeds = [s.strip() for s in (args.include_seeds or "").split(",") if s.strip()]
+    if include_seeds and "seed" in all_fieldnames:
+        normalized = [r for r in normalized if str(r.get("seed", "")).strip() in include_seeds]
+        if not normalized:
+            raise SystemExit(f"No rows left after --include-seeds={args.include_seeds}")
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     if not args.aggregate:
@@ -129,9 +141,13 @@ def main() -> None:
             raise SystemExit(f"--group-cols column not found: {c}")
 
     # Determine numeric columns by attempting to parse at least one value.
+    # Skip identifiers/metadata even if numeric.
+    skip_numeric_cols = {"seed", "node", "gpu_name"}
     numeric_cols: list[str] = []
     for col in all_fieldnames:
         if col in group_cols:
+            continue
+        if col in skip_numeric_cols:
             continue
         if any(to_float(r.get(col)) is not None for r in normalized):
             numeric_cols.append(col)
@@ -141,7 +157,7 @@ def main() -> None:
         key = tuple(r.get(c, "") for c in group_cols)
         groups[key].append(r)
 
-    out_fieldnames = group_cols + ["n_rows"]
+    out_fieldnames = group_cols + ["n_rows", "seeds", "nodes", "gpu_names"]
     for col in numeric_cols:
         out_fieldnames.append(f"{col}_mean")
         out_fieldnames.append(f"{col}_std")
@@ -151,6 +167,18 @@ def main() -> None:
         members = groups[key]
         out: dict[str, str] = {c: v for c, v in zip(group_cols, key)}
         out["n_rows"] = str(len(members))
+        if "seed" in all_fieldnames:
+            out["seeds"] = ",".join(sorted({str(m.get("seed", "")).strip() for m in members if str(m.get("seed", "")).strip()}))
+        else:
+            out["seeds"] = ""
+        if "node" in all_fieldnames:
+            out["nodes"] = ",".join(sorted({str(m.get("node", "")).strip() for m in members if str(m.get("node", "")).strip()}))
+        else:
+            out["nodes"] = ""
+        if "gpu_name" in all_fieldnames:
+            out["gpu_names"] = ",".join(sorted({str(m.get("gpu_name", "")).strip() for m in members if str(m.get("gpu_name", "")).strip()}))
+        else:
+            out["gpu_names"] = ""
         for col in numeric_cols:
             vals = [to_float(m.get(col)) for m in members]
             vals = [v for v in vals if v is not None]
@@ -176,4 +204,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
