@@ -11,7 +11,11 @@
 #SBATCH --partition=gpu
 #
 # Usage:
-#   sbatch --array=0-3 job_phase2_u4_tie_vs_stack_d16_d32_array.slurm
+#   sbatch --array=0-11 job_phase2_u4_tie_vs_stack_d16_d32_array.slurm
+#   sbatch --array=0-11%6 job_phase2_u4_tie_vs_stack_d16_d32_array.slurm   # throttle
+#
+# Optional (pin a GPU type; pick one your cluster supports):
+#   sbatch --gres=gpu:h100-47:1 --array=0-11 job_phase2_u4_tie_vs_stack_d16_d32_array.slurm
 #
 # Compares tied vs stacked critics at D=16 and D=32 on standard U4 (train=eval).
 # - Actor: untied_resnet depth=D
@@ -29,10 +33,12 @@ conda activate recurrent
 
 export WANDB_MODE=disabled
 export WANDB_DIR="${SLURM_TMPDIR:-/tmp}"
+export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_deterministic_reductions"
 
 ENV_ID="ant_u4_maze"
 EVAL_ENV_ID="ant_u4_maze"
-SEED=1000
+SEEDS=(1001 1003 1004)
+NUM_CONFIGS=4
 
 COMMON_ARGS="--no-track \
   --no-capture-vis \
@@ -49,7 +55,6 @@ COMMON_ARGS="--no-track \
   --critic-lr 0.0003 \
   --env-id $ENV_ID \
   --eval-env-id $EVAL_ENV_ID \
-  --seed $SEED \
   --compact-metrics \
   --summary-tail-epochs 10 \
   --no-print-args \
@@ -63,8 +68,15 @@ TIED_MLP_ARGS="--tied-mlp-ffn-mult 2.667 \
   --tied-mlp-trunc-bptt 0"
 
 task_id=${SLURM_ARRAY_TASK_ID:-0}
+seed_idx=$((task_id / NUM_CONFIGS))
+cfg_idx=$((task_id % NUM_CONFIGS))
+if [ "$seed_idx" -ge "${#SEEDS[@]}" ]; then
+  echo "Invalid SLURM_ARRAY_TASK_ID=$task_id for ${#SEEDS[@]} seeds and $NUM_CONFIGS configs" >&2
+  exit 2
+fi
+SEED="${SEEDS[$seed_idx]}"
 
-case "$task_id" in
+case "$cfg_idx" in
   0)
     NAME="u4_tievsstack_d16_critic_tied_1x4"
     ACTOR_DEPTH=16
@@ -94,19 +106,23 @@ case "$task_id" in
     CRITIC_STEPS=8
     ;;
   *)
-    echo "Unknown SLURM_ARRAY_TASK_ID=$task_id (expected 0-3)" >&2
+    echo "Unknown config index $cfg_idx (expected 0-3)" >&2
     exit 2
     ;;
 esac
 
-LOG="logs/${NAME}_${SLURM_JOB_ID:-local}_${task_id}.log"
-OUT="results/phase2/array_u4_tievsstack/${NAME}_${SLURM_JOB_ID:-local}_${task_id}.csv"
-echo "config,seed,actor_depth,critic_blocks,critic_iters,critic_steps,env_steps,success_rate,success_any,param_count,eval_reward,training_time_hours" > "$OUT"
+NODE="$(hostname)"
+GPU_NAME="$(command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader | head -1 || echo N/A)"
+
+LOG="logs/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.log"
+OUT="results/phase2/array_u4_tievsstack/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.csv"
+echo "config,seed,node,gpu_name,actor_depth,critic_blocks,critic_iters,critic_steps,env_steps,success_rate,success_any,param_count,eval_reward,training_time_hours" > "$OUT"
 
 echo "[$(date +%H:%M:%S)] Running $NAME on 1 GPU..."
 python scripts/crl_train.py \
   --exp-name "$NAME" \
   $COMMON_ARGS \
+  --seed "$SEED" \
   --actor-depth "$ACTOR_DEPTH" \
   --critic-depth "$ACTOR_DEPTH" \
   --encoder-type tied_mlp \
@@ -129,6 +145,5 @@ if [ "$train_time" != "N/A" ]; then
   train_time=$(echo "scale=2; $train_time / 3600" | bc)
 fi
 
-echo "$NAME,$SEED,$ACTOR_DEPTH,$CRITIC_BLOCKS,$CRITIC_ITERS,$CRITIC_STEPS,$env_steps,$success_rate,$success_any,$param_count,$eval_reward,$train_time" >> "$OUT"
+echo "$NAME,$SEED,$NODE,$GPU_NAME,$ACTOR_DEPTH,$CRITIC_BLOCKS,$CRITIC_ITERS,$CRITIC_STEPS,$env_steps,$success_rate,$success_any,$param_count,$eval_reward,$train_time" >> "$OUT"
 echo "[$(date +%H:%M:%S)] Done. Row written to $OUT"
-
