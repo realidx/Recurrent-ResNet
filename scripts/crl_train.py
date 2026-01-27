@@ -1,5 +1,9 @@
 import os
 import sys
+import json
+import hashlib
+import platform
+import subprocess
 from pathlib import Path
 import jax
 import flax
@@ -31,6 +35,49 @@ from recurrent_resnet.jax.recurrent_core import RecurrentResidualCore, ResidualS
 
 from evaluator import CrlEvaluator
 from buffer import TrajectoryUniformSamplingQueue
+
+def _run_cmd(cmd: list[str], cwd: Path) -> str:
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=str(cwd),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        return completed.stdout.strip()
+    except Exception:
+        return "N/A"
+
+def _git_is_dirty(repo_root: Path) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--quiet"],
+            cwd=str(repo_root),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return "1" if proc.returncode != 0 else "0"
+    except Exception:
+        return "N/A"
+
+def get_repo_fingerprint(repo_root: Path, args: "Args") -> dict[str, str]:
+    argv = " ".join(sys.argv)
+    args_json = json.dumps(vars(args), sort_keys=True, default=str)
+    return {
+        "meta/argv_sha1": hashlib.sha1(argv.encode("utf-8")).hexdigest()[:10],
+        "meta/args_sha1": hashlib.sha1(args_json.encode("utf-8")).hexdigest()[:10],
+        "meta/git_rev": _run_cmd(["git", "rev-parse", "--short", "HEAD"], cwd=repo_root),
+        "meta/git_dirty": _git_is_dirty(repo_root),
+        "meta/python": platform.python_version(),
+        "meta/jax": getattr(jax, "__version__", "N/A"),
+        "meta/jaxlib": getattr(getattr(jax, "lib", None), "__version__", "N/A"),
+        "meta/platform": platform.platform(),
+        "meta/host": platform.node() or "N/A",
+        "meta/jax_device_count": str(len(jax.devices())),
+        "meta/jax_device_kind": getattr(jax.devices()[0], "device_kind", "N/A") if jax.devices() else "N/A",
+    }
 
 def resolve_alpha(alpha_mode: str, alpha_init: float, steps: int) -> float:
     if steps < 1:
@@ -511,6 +558,10 @@ def save_params(path: str, params: Any):
 if __name__ == "__main__":
 
     args = tyro.cli(Args)
+
+    # Snapshot run fingerprint immediately after CLI parsing so we can compare
+    # "same setting" runs across time / machines / dependency changes.
+    run_fingerprint = get_repo_fingerprint(repo_root, args)
     
     if args.print_args:
         print("Arguments:", flush=args.log_flush)
@@ -805,7 +856,9 @@ if __name__ == "__main__":
     )
     if args.use_goal_from_obs_tail:
         set_goal_indices(eval_env, args.goal_dim)
-    eval_env_keys = jax.random.split(eval_env_key, args.num_envs)
+    # Evaluation should be seeded independently of training parallelism.
+    # Using num_eval_envs here avoids changing the eval distribution when num_envs changes.
+    eval_env_keys = jax.random.split(eval_env_key, args.num_eval_envs)
     eval_env_state = jax.jit(eval_env.reset)(eval_env_keys)
     eval_env.step = jax.jit(eval_env.step)
 
@@ -1443,6 +1496,7 @@ if __name__ == "__main__":
     print(f"param_count: {param_count}", flush=True)
     print('starting training....', flush=True)
     start_time = time.time() 
+    tail_summaries: list[dict[str, object]] = []
     for ne in range(args.num_epochs):
         
         t = time.time()
@@ -1504,13 +1558,21 @@ if __name__ == "__main__":
             ]
             summary = {
                 "env_id": args.env_id,
+                "eval_env_id": args.eval_env_id,
+                "seed": args.seed,
                 "encoder_type": args.encoder_type,
                 "recur_steps": args.recur_steps,
+                "recur_apply_to_actor": args.recur_apply_to_actor,
+                "recur_apply_to_critic": args.recur_apply_to_critic,
+                "actor_depth": args.actor_depth,
+                "critic_depth": args.critic_depth,
             }
+            summary.update(run_fingerprint)
             for key_name in summary_keys:
                 if key_name in metrics:
                     summary[key_name] = to_float(metrics[key_name])
             if args.summary_tail_epochs <= 0 or ne >= args.num_epochs - args.summary_tail_epochs:
+                tail_summaries.append(summary)
                 print(f"epoch {ne} summary: {summary}", flush=args.log_flush)
 
         if args.print_full_metrics:
@@ -1541,6 +1603,18 @@ if __name__ == "__main__":
             is_last_epoch = ne == args.num_epochs - 1
             if is_last_epoch or (ne % args.time_print_interval_epochs == 0):
                 print(f"Time elapsed: {hours_passed:.3f} hours", flush=args.log_flush)
+
+    if args.compact_metrics and tail_summaries:
+        final_summary: dict[str, object] = {}
+        keys = set().union(*(s.keys() for s in tail_summaries))
+        for key_name in keys:
+            values = [s[key_name] for s in tail_summaries if key_name in s]
+            if values and all(isinstance(v, (int, float)) for v in values):
+                final_summary[key_name] = float(np.mean(values))
+            else:
+                final_summary[key_name] = values[-1] if values else "N/A"
+        final_summary["meta/tail_epochs"] = len(tail_summaries)
+        print(f"final_summary: {final_summary}", flush=args.log_flush)
 
     
     if args.checkpoint:

@@ -79,28 +79,13 @@ SEED="${SEEDS[$seed_idx]}"
 
 case "$cfg_idx" in
   0)
-    NAME="u4_untied_resnet_d16"
-    CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
-      --encoder-type untied_resnet --recur-apply-to-actor 0 --recur-apply-to-critic 0 --actor-depth 16 --critic-depth 16)
-    ;;
-  1)
-    NAME="u4_untied_resnet_d32"
-    CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
-      --encoder-type untied_resnet --recur-apply-to-actor 0 --recur-apply-to-critic 0 --actor-depth 32 --critic-depth 32)
-    ;;
-  2)
-    NAME="u4_untied_resnet_d64"
-    CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
-      --encoder-type untied_resnet --recur-apply-to-actor 0 --recur-apply-to-critic 0 --actor-depth 64 --critic-depth 64)
-    ;;
-  3)
     NAME="u4_tiedcritic_d32_C2x4"
     CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
       --actor-depth 32 --critic-depth 32 \
       --encoder-type tied_mlp --recur-apply-to-actor 0 --recur-apply-to-critic 1 \
       --critic-recur-steps 8 $TIED_MLP_ARGS --critic-tied-mlp-blocks 2 --critic-tied-mlp-iters 4)
     ;;
-  4)
+  1)
     NAME="u4_tiedcritic_d64_C4x4"
     CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
       --actor-depth 64 --critic-depth 64 \
@@ -118,21 +103,26 @@ GPU_NAME="$(command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name
 
 LOG="logs/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.log"
 OUT="${OUT_DIR}/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.csv"
-echo "config,seed,node,gpu_name,env_steps,success_rate,success_any,param_count,eval_reward,training_time_hours" > "$OUT"
+echo "config,seed,node,gpu_name,git_rev,args_sha1,env_steps,success_rate,success_any,param_count,eval_reward,training_time_hours" > "$OUT"
 
 echo "[$(date +%H:%M:%S)] Running $NAME on 1 GPU..."
 "${CMD[@]}" --seed "$SEED" > "$LOG" 2>&1
 
-last_summary=$(grep "summary:" "$LOG" | tail -1 || true)
+last_summary=$(grep "final_summary:" "$LOG" | tail -1 || true)
+if [ -z "$last_summary" ]; then
+  last_summary=$(grep "summary:" "$LOG" | tail -1 || true)
+fi
 env_steps=$(echo "$last_summary" | grep -oP "'training/envsteps': \\K[0-9.]+|'training/envsteps': \\Knan" || echo "N/A")
 success_rate=$(echo "$last_summary" | grep -oP "'eval/success_rate': \\K[0-9.]+|'eval/success_rate': \\Knan" || echo "N/A")
 success_any=$(echo "$last_summary" | grep -oP "'eval/episode_success_any': \\K[0-9.]+|'eval/episode_success_any': \\Knan" || echo "N/A")
 param_count=$(echo "$last_summary" | grep -oP "'model/param_count': \\K[0-9.]+|'model/param_count': \\Knan" || echo "N/A")
 eval_reward=$(echo "$last_summary" | grep -oP "'eval/episode_reward': \\K[-0-9.]+|'eval/episode_reward': \\Knan" || echo "N/A")
+git_rev=$(echo "$last_summary" | grep -oP "'meta/git_rev': '\\K[^']+" || echo "N/A")
+args_sha1=$(echo "$last_summary" | grep -oP "'meta/args_sha1': '\\K[^']+" || echo "N/A")
 train_time=$(echo "$last_summary" | grep -oP "'training/walltime': \\K[0-9.]+" || echo "N/A")
 if [ "$train_time" != "N/A" ]; then
   train_time=$(echo "scale=2; $train_time / 3600" | bc)
 fi
 
-echo "$NAME,$SEED,$NODE,$GPU_NAME,$env_steps,$success_rate,$success_any,$param_count,$eval_reward,$train_time" >> "$OUT"
+echo "$NAME,$SEED,$NODE,$GPU_NAME,$git_rev,$args_sha1,$env_steps,$success_rate,$success_any,$param_count,$eval_reward,$train_time" >> "$OUT"
 echo "[$(date +%H:%M:%S)] Done. Row written to $OUT"
