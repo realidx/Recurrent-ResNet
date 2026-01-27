@@ -103,26 +103,37 @@ GPU_NAME="$(command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name
 
 LOG="logs/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.log"
 OUT="${OUT_DIR}/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.csv"
-echo "config,seed,node,gpu_name,git_rev,args_sha1,env_steps,success_rate,success_any,param_count,eval_reward,training_time_hours" > "$OUT"
+echo "config,seed,node,gpu_name,git_rev,args_sha1,env_steps_final,success_rate_final,success_any_final,eval_reward_final,env_steps_tailmean,success_rate_tailmean,success_any_tailmean,eval_reward_tailmean,param_count,training_time_hours" > "$OUT"
 
 echo "[$(date +%H:%M:%S)] Running $NAME on 1 GPU..."
 "${CMD[@]}" --seed "$SEED" > "$LOG" 2>&1
 
-last_summary=$(grep "final_summary:" "$LOG" | tail -1 || true)
-if [ -z "$last_summary" ]; then
-  last_summary=$(grep "summary:" "$LOG" | tail -1 || true)
+final_line=$(grep "final_summary:" "$LOG" | tail -1 || true)
+tail_line=$(grep "tail_mean_summary:" "$LOG" | tail -1 || true)
+if [ -z "$final_line" ]; then
+  final_line=$(grep "summary:" "$LOG" | tail -1 || true)
 fi
-env_steps=$(echo "$last_summary" | grep -oP "'training/envsteps': \\K[0-9.]+|'training/envsteps': \\Knan" || echo "N/A")
-success_rate=$(echo "$last_summary" | grep -oP "'eval/success_rate': \\K[0-9.]+|'eval/success_rate': \\Knan" || echo "N/A")
-success_any=$(echo "$last_summary" | grep -oP "'eval/episode_success_any': \\K[0-9.]+|'eval/episode_success_any': \\Knan" || echo "N/A")
-param_count=$(echo "$last_summary" | grep -oP "'model/param_count': \\K[0-9.]+|'model/param_count': \\Knan" || echo "N/A")
-eval_reward=$(echo "$last_summary" | grep -oP "'eval/episode_reward': \\K[-0-9.]+|'eval/episode_reward': \\Knan" || echo "N/A")
-git_rev=$(echo "$last_summary" | grep -oP "'meta/git_rev': '\\K[^']+" || echo "N/A")
-args_sha1=$(echo "$last_summary" | grep -oP "'meta/args_sha1': '\\K[^']+" || echo "N/A")
-train_time=$(echo "$last_summary" | grep -oP "'training/walltime': \\K[0-9.]+" || echo "N/A")
+if [ -z "$tail_line" ]; then
+  tail_line="$final_line"
+fi
+
+env_steps_final=$(echo "$final_line" | grep -oP "'training/envsteps': \\K[0-9.]+|'training/envsteps': \\Knan" || echo "N/A")
+success_rate_final=$(echo "$final_line" | grep -oP "'eval/success_rate': \\K[0-9.]+|'eval/success_rate': \\Knan" || echo "N/A")
+success_any_final=$(echo "$final_line" | grep -oP "'eval/episode_success_any': \\K[0-9.]+|'eval/episode_success_any': \\Knan" || echo "N/A")
+eval_reward_final=$(echo "$final_line" | grep -oP "'eval/episode_reward': \\K[-0-9.]+|'eval/episode_reward': \\Knan" || echo "N/A")
+
+env_steps_tailmean=$(echo "$tail_line" | grep -oP "'training/envsteps': \\K[0-9.]+|'training/envsteps': \\Knan" || echo "N/A")
+success_rate_tailmean=$(echo "$tail_line" | grep -oP "'eval/success_rate': \\K[0-9.]+|'eval/success_rate': \\Knan" || echo "N/A")
+success_any_tailmean=$(echo "$tail_line" | grep -oP "'eval/episode_success_any': \\K[0-9.]+|'eval/episode_success_any': \\Knan" || echo "N/A")
+eval_reward_tailmean=$(echo "$tail_line" | grep -oP "'eval/episode_reward': \\K[-0-9.]+|'eval/episode_reward': \\Knan" || echo "N/A")
+
+param_count=$(echo "$final_line" | grep -oP "'model/param_count': \\K[0-9.]+|'model/param_count': \\Knan" || echo "N/A")
+git_rev=$(echo "$final_line" | grep -oP "'meta/git_rev': '\\K[^']+" || echo "N/A")
+args_sha1=$(echo "$final_line" | grep -oP "'meta/args_sha1': '\\K[^']+" || echo "N/A")
+train_time=$(echo "$final_line" | grep -oP "'training/walltime': \\K[0-9.]+" || echo "N/A")
 if [ "$train_time" != "N/A" ]; then
   train_time=$(echo "scale=2; $train_time / 3600" | bc)
 fi
 
-echo "$NAME,$SEED,$NODE,$GPU_NAME,$git_rev,$args_sha1,$env_steps,$success_rate,$success_any,$param_count,$eval_reward,$train_time" >> "$OUT"
+echo "$NAME,$SEED,$NODE,$GPU_NAME,$git_rev,$args_sha1,$env_steps_final,$success_rate_final,$success_any_final,$eval_reward_final,$env_steps_tailmean,$success_rate_tailmean,$success_any_tailmean,$eval_reward_tailmean,$param_count,$train_time" >> "$OUT"
 echo "[$(date +%H:%M:%S)] Done. Row written to $OUT"

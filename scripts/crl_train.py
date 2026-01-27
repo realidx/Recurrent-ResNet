@@ -1497,6 +1497,7 @@ if __name__ == "__main__":
     print('starting training....', flush=True)
     start_time = time.time() 
     tail_summaries: list[dict[str, object]] = []
+    best_snapshot: dict[str, object] | None = None
     for ne in range(args.num_epochs):
         
         t = time.time()
@@ -1571,6 +1572,12 @@ if __name__ == "__main__":
             for key_name in summary_keys:
                 if key_name in metrics:
                     summary[key_name] = to_float(metrics[key_name])
+
+            # Track a "best so far" snapshot without spamming logs.
+            if "eval/success_rate" in summary:
+                if best_snapshot is None or float(summary["eval/success_rate"]) > float(best_snapshot.get("eval/success_rate", -1.0)):  # type: ignore[arg-type]
+                    best_snapshot = dict(summary)
+
             if args.summary_tail_epochs <= 0 or ne >= args.num_epochs - args.summary_tail_epochs:
                 tail_summaries.append(summary)
                 print(f"epoch {ne} summary: {summary}", flush=args.log_flush)
@@ -1605,16 +1612,27 @@ if __name__ == "__main__":
                 print(f"Time elapsed: {hours_passed:.3f} hours", flush=args.log_flush)
 
     if args.compact_metrics and tail_summaries:
-        final_summary: dict[str, object] = {}
+        tail_mean_summary: dict[str, object] = {}
         keys = set().union(*(s.keys() for s in tail_summaries))
         for key_name in keys:
             values = [s[key_name] for s in tail_summaries if key_name in s]
             if values and all(isinstance(v, (int, float)) for v in values):
-                final_summary[key_name] = float(np.mean(values))
+                tail_mean_summary[key_name] = float(np.mean(values))
             else:
-                final_summary[key_name] = values[-1] if values else "N/A"
-        final_summary["meta/tail_epochs"] = len(tail_summaries)
-        print(f"final_summary: {final_summary}", flush=args.log_flush)
+                tail_mean_summary[key_name] = values[-1] if values else "N/A"
+
+        # Keep some fields as "final" values to avoid confusion in CSVs.
+        keep_last_keys = {"training/envsteps", "training/walltime", "training/sps"}
+        last_summary = tail_summaries[-1]
+        for key_name in keep_last_keys:
+            if key_name in last_summary:
+                tail_mean_summary[key_name] = last_summary[key_name]
+
+        tail_mean_summary["meta/tail_epochs"] = len(tail_summaries)
+        print(f"tail_mean_summary: {tail_mean_summary}", flush=args.log_flush)
+        print(f"final_summary: {last_summary}", flush=args.log_flush)
+        if best_snapshot is not None:
+            print(f"best_summary: {best_snapshot}", flush=args.log_flush)
 
     
     if args.checkpoint:
