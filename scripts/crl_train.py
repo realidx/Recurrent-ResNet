@@ -178,7 +178,7 @@ class Args:
     actor_skip_connections: int = 0 # 0 for no skip connections, >= 0 means the frequency of skip connections (every N layers)
     critic_skip_connections: int = 0 # 0 for no skip connections, >= 0 means the frequency of skip connections (every N layers)
 
-    encoder_type: str = "untied_resnet" # untied_resnet | recurrent_tied | recurrent_untied | recurrent_partial
+    encoder_type: str = "untied_resnet" # untied_resnet | recurrent_tied | recurrent_untied | recurrent_partial | tied_mlp
     recur_steps: int = 4
     recur_depth_dropout: float = 0.0
     recur_apply_to_actor: int = 0
@@ -194,18 +194,14 @@ class Args:
     recur_alpha_init: float = 1.0
 
     # Tied MLP specific arguments
-    tied_mlp_blocks: int = 1  # Number of distinct blocks (L)
-    tied_mlp_iters: int = 4   # Number of iterations (K), total steps = L * K
+    tied_mlp_iters: int = 4   # Number of recurrent refinement iterations (K)
     tied_mlp_ffn_mult: float = 2.667  # FFN expansion multiplier (8/3 for SwiGLU)
     tied_mlp_layerscale_init: float = 0.01  # LayerScale initialization
-    tied_mlp_step_embed_dim: int = 0  # Step embedding dim (0 = use width)
     tied_mlp_trunc_bptt: int = 0  # Truncated BPTT window (0 = disabled)
 
-    # Optional overrides to use different TiedMLP shapes for actor vs critic.
-    # If 0, falls back to tied_mlp_blocks / tied_mlp_iters.
-    actor_tied_mlp_blocks: int = 0
+    # Optional overrides to use different TiedMLP step counts for actor vs critic.
+    # If 0, falls back to tied_mlp_iters.
     actor_tied_mlp_iters: int = 0
-    critic_tied_mlp_blocks: int = 0
     critic_tied_mlp_iters: int = 0
 
     # Optional overrides to use different recurrent step counts for actor vs critic.
@@ -269,11 +265,9 @@ class SA_encoder(nn.Module):
     recur_alpha_mode: str = "fixed"
     recur_alpha_init: float = 1.0
     # Tied MLP params
-    tied_mlp_blocks: int = 1
     tied_mlp_iters: int = 4
     tied_mlp_ffn_mult: float = 2.667
     tied_mlp_layerscale_init: float = 0.01
-    tied_mlp_step_embed_dim: int = 0
     tied_mlp_trunc_bptt: int = 0
     @nn.compact
     def __call__(self, s: jnp.ndarray, a: jnp.ndarray, steps: Optional[jnp.ndarray] = None):
@@ -291,52 +285,54 @@ class SA_encoder(nn.Module):
             activation = nn.swish
 
         x = jnp.concatenate([s, a], axis=-1)
-        # Initial layer
-        x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
-        x = normalize(x)
-        x = activation(x)
-        # Residual core
-        if self.encoder_type == "untied_resnet":
-            num_blocks = self.network_depth // 4
-            if num_blocks > 0:
-                alpha = resolve_alpha(self.recur_alpha_mode, self.recur_alpha_init, num_blocks)
-                x = ResidualStack(
-                    width=self.network_width,
-                    num_blocks=num_blocks,
-                    norm_type=self.norm_type,
-                    use_relu=self.use_relu,
-                    pre_norm=bool(self.recur_pre_norm),
-                    alpha=alpha,
-                )(x)
-        elif self.encoder_type in {"recurrent_tied", "recurrent_untied", "recurrent_partial"}:
-            x = RecurrentResidualCore(
-                width=self.network_width,
-                steps=self.recur_steps,
-                tie_weights=self.encoder_type != "recurrent_untied",
-                stages=self.recur_stages,
-                variant=self.recur_variant,
-                step_embed_dim=self.recur_step_embed_dim,
-                norm_type=self.norm_type,
-                use_relu=self.use_relu,
-                init_identity=bool(self.recur_init_identity),
-                trunc_bptt=self.recur_trunc_bptt,
-                pre_norm=bool(self.recur_pre_norm),
-                alpha_mode=self.recur_alpha_mode,
-                alpha_init=self.recur_alpha_init,
-            )(x, steps=steps)
-        elif self.encoder_type == "tied_mlp":
+        if self.encoder_type == "tied_mlp":
+            # For the recurrent SwiGLU story, keep the wrapper minimal:
+            # input projection -> recurrent core -> output projection.
+            x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
             from recurrent_resnet.jax.tied_mlp import TiedMLP
             x = TiedMLP(
                 width=self.network_width,
-                num_blocks=self.tied_mlp_blocks,
                 num_iters=self.tied_mlp_iters,
                 ffn_mult=self.tied_mlp_ffn_mult,
                 layerscale_init=self.tied_mlp_layerscale_init,
-                step_embed_dim=self.tied_mlp_step_embed_dim,
                 trunc_bptt=self.tied_mlp_trunc_bptt,
             )(x, steps=steps)
         else:
-            raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
+            # Initial layer
+            x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+            x = normalize(x)
+            x = activation(x)
+            # Residual core
+            if self.encoder_type == "untied_resnet":
+                num_blocks = self.network_depth // 4
+                if num_blocks > 0:
+                    alpha = resolve_alpha(self.recur_alpha_mode, self.recur_alpha_init, num_blocks)
+                    x = ResidualStack(
+                        width=self.network_width,
+                        num_blocks=num_blocks,
+                        norm_type=self.norm_type,
+                        use_relu=self.use_relu,
+                        pre_norm=bool(self.recur_pre_norm),
+                        alpha=alpha,
+                    )(x)
+            elif self.encoder_type in {"recurrent_tied", "recurrent_untied", "recurrent_partial"}:
+                x = RecurrentResidualCore(
+                    width=self.network_width,
+                    steps=self.recur_steps,
+                    tie_weights=self.encoder_type != "recurrent_untied",
+                    stages=self.recur_stages,
+                    variant=self.recur_variant,
+                    step_embed_dim=self.recur_step_embed_dim,
+                    norm_type=self.norm_type,
+                    use_relu=self.use_relu,
+                    init_identity=bool(self.recur_init_identity),
+                    trunc_bptt=self.recur_trunc_bptt,
+                    pre_norm=bool(self.recur_pre_norm),
+                    alpha_mode=self.recur_alpha_mode,
+                    alpha_init=self.recur_alpha_init,
+                )(x, steps=steps)
+            else:
+                raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
         # Final layer
         x = nn.Dense(64, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
         return x
@@ -358,11 +354,9 @@ class G_encoder(nn.Module):
     recur_alpha_mode: str = "fixed"
     recur_alpha_init: float = 1.0
     # Tied MLP params
-    tied_mlp_blocks: int = 1
     tied_mlp_iters: int = 4
     tied_mlp_ffn_mult: float = 2.667
     tied_mlp_layerscale_init: float = 0.01
-    tied_mlp_step_embed_dim: int = 0
     tied_mlp_trunc_bptt: int = 0
     @nn.compact
     def __call__(self, g: jnp.ndarray, steps: Optional[jnp.ndarray] = None):
@@ -380,52 +374,52 @@ class G_encoder(nn.Module):
             activation = nn.swish
 
         x = g
-        # Initial layer
-        x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
-        x = normalize(x)
-        x = activation(x)
-        # Residual core
-        if self.encoder_type == "untied_resnet":
-            num_blocks = self.network_depth // 4
-            if num_blocks > 0:
-                alpha = resolve_alpha(self.recur_alpha_mode, self.recur_alpha_init, num_blocks)
-                x = ResidualStack(
-                    width=self.network_width,
-                    num_blocks=num_blocks,
-                    norm_type=self.norm_type,
-                    use_relu=self.use_relu,
-                    pre_norm=bool(self.recur_pre_norm),
-                    alpha=alpha,
-                )(x)
-        elif self.encoder_type in {"recurrent_tied", "recurrent_untied", "recurrent_partial"}:
-            x = RecurrentResidualCore(
-                width=self.network_width,
-                steps=self.recur_steps,
-                tie_weights=self.encoder_type != "recurrent_untied",
-                stages=self.recur_stages,
-                variant=self.recur_variant,
-                step_embed_dim=self.recur_step_embed_dim,
-                norm_type=self.norm_type,
-                use_relu=self.use_relu,
-                init_identity=bool(self.recur_init_identity),
-                trunc_bptt=self.recur_trunc_bptt,
-                pre_norm=bool(self.recur_pre_norm),
-                alpha_mode=self.recur_alpha_mode,
-                alpha_init=self.recur_alpha_init,
-            )(x, steps=steps)
-        elif self.encoder_type == "tied_mlp":
+        if self.encoder_type == "tied_mlp":
+            x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
             from recurrent_resnet.jax.tied_mlp import TiedMLP
             x = TiedMLP(
                 width=self.network_width,
-                num_blocks=self.tied_mlp_blocks,
                 num_iters=self.tied_mlp_iters,
                 ffn_mult=self.tied_mlp_ffn_mult,
                 layerscale_init=self.tied_mlp_layerscale_init,
-                step_embed_dim=self.tied_mlp_step_embed_dim,
                 trunc_bptt=self.tied_mlp_trunc_bptt,
             )(x, steps=steps)
         else:
-            raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
+            # Initial layer
+            x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+            x = normalize(x)
+            x = activation(x)
+            # Residual core
+            if self.encoder_type == "untied_resnet":
+                num_blocks = self.network_depth // 4
+                if num_blocks > 0:
+                    alpha = resolve_alpha(self.recur_alpha_mode, self.recur_alpha_init, num_blocks)
+                    x = ResidualStack(
+                        width=self.network_width,
+                        num_blocks=num_blocks,
+                        norm_type=self.norm_type,
+                        use_relu=self.use_relu,
+                        pre_norm=bool(self.recur_pre_norm),
+                        alpha=alpha,
+                    )(x)
+            elif self.encoder_type in {"recurrent_tied", "recurrent_untied", "recurrent_partial"}:
+                x = RecurrentResidualCore(
+                    width=self.network_width,
+                    steps=self.recur_steps,
+                    tie_weights=self.encoder_type != "recurrent_untied",
+                    stages=self.recur_stages,
+                    variant=self.recur_variant,
+                    step_embed_dim=self.recur_step_embed_dim,
+                    norm_type=self.norm_type,
+                    use_relu=self.use_relu,
+                    init_identity=bool(self.recur_init_identity),
+                    trunc_bptt=self.recur_trunc_bptt,
+                    pre_norm=bool(self.recur_pre_norm),
+                    alpha_mode=self.recur_alpha_mode,
+                    alpha_init=self.recur_alpha_init,
+                )(x, steps=steps)
+            else:
+                raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
         # Final layer
         x = nn.Dense(64, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
         return x
@@ -448,11 +442,9 @@ class Actor(nn.Module):
     recur_alpha_mode: str = "fixed"
     recur_alpha_init: float = 1.0
     # Tied MLP params
-    tied_mlp_blocks: int = 1
     tied_mlp_iters: int = 4
     tied_mlp_ffn_mult: float = 2.667
     tied_mlp_layerscale_init: float = 0.01
-    tied_mlp_step_embed_dim: int = 0
     tied_mlp_trunc_bptt: int = 0
     LOG_STD_MAX = 2
     LOG_STD_MIN = -5
@@ -472,52 +464,52 @@ class Actor(nn.Module):
         lecun_unfirom = variance_scaling(1/3, "fan_in", "uniform")
         bias_init = nn.initializers.zeros
     
-        # Initial layer
-        x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
-        x = normalize(x)
-        x = activation(x)
-        # Residual core
-        if self.encoder_type == "untied_resnet":
-            num_blocks = self.network_depth // 4
-            if num_blocks > 0:
-                alpha = resolve_alpha(self.recur_alpha_mode, self.recur_alpha_init, num_blocks)
-                x = ResidualStack(
-                    width=self.network_width,
-                    num_blocks=num_blocks,
-                    norm_type=self.norm_type,
-                    use_relu=self.use_relu,
-                    pre_norm=bool(self.recur_pre_norm),
-                    alpha=alpha,
-                )(x)
-        elif self.encoder_type in {"recurrent_tied", "recurrent_untied", "recurrent_partial"}:
-            x = RecurrentResidualCore(
-                width=self.network_width,
-                steps=self.recur_steps,
-                tie_weights=self.encoder_type != "recurrent_untied",
-                stages=self.recur_stages,
-                variant=self.recur_variant,
-                step_embed_dim=self.recur_step_embed_dim,
-                norm_type=self.norm_type,
-                use_relu=self.use_relu,
-                init_identity=bool(self.recur_init_identity),
-                trunc_bptt=self.recur_trunc_bptt,
-                pre_norm=bool(self.recur_pre_norm),
-                alpha_mode=self.recur_alpha_mode,
-                alpha_init=self.recur_alpha_init,
-            )(x, steps=steps)
-        elif self.encoder_type == "tied_mlp":
+        if self.encoder_type == "tied_mlp":
+            x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
             from recurrent_resnet.jax.tied_mlp import TiedMLP
             x = TiedMLP(
                 width=self.network_width,
-                num_blocks=self.tied_mlp_blocks,
                 num_iters=self.tied_mlp_iters,
                 ffn_mult=self.tied_mlp_ffn_mult,
                 layerscale_init=self.tied_mlp_layerscale_init,
-                step_embed_dim=self.tied_mlp_step_embed_dim,
                 trunc_bptt=self.tied_mlp_trunc_bptt,
             )(x, steps=steps)
         else:
-            raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
+            # Initial layer
+            x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+            x = normalize(x)
+            x = activation(x)
+            # Residual core
+            if self.encoder_type == "untied_resnet":
+                num_blocks = self.network_depth // 4
+                if num_blocks > 0:
+                    alpha = resolve_alpha(self.recur_alpha_mode, self.recur_alpha_init, num_blocks)
+                    x = ResidualStack(
+                        width=self.network_width,
+                        num_blocks=num_blocks,
+                        norm_type=self.norm_type,
+                        use_relu=self.use_relu,
+                        pre_norm=bool(self.recur_pre_norm),
+                        alpha=alpha,
+                    )(x)
+            elif self.encoder_type in {"recurrent_tied", "recurrent_untied", "recurrent_partial"}:
+                x = RecurrentResidualCore(
+                    width=self.network_width,
+                    steps=self.recur_steps,
+                    tie_weights=self.encoder_type != "recurrent_untied",
+                    stages=self.recur_stages,
+                    variant=self.recur_variant,
+                    step_embed_dim=self.recur_step_embed_dim,
+                    norm_type=self.norm_type,
+                    use_relu=self.use_relu,
+                    init_identity=bool(self.recur_init_identity),
+                    trunc_bptt=self.recur_trunc_bptt,
+                    pre_norm=bool(self.recur_pre_norm),
+                    alpha_mode=self.recur_alpha_mode,
+                    alpha_init=self.recur_alpha_init,
+                )(x, steps=steps)
+            else:
+                raise ValueError(f"Unknown encoder_type: {self.encoder_type}")
         # Final layer
         mean = nn.Dense(self.action_size, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
         log_std = nn.Dense(self.action_size, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
@@ -868,7 +860,6 @@ if __name__ == "__main__":
     critic_encoder_type = args.encoder_type if args.recur_apply_to_critic else "untied_resnet"
 
     # Actor
-    actor_tied_mlp_blocks = args.actor_tied_mlp_blocks or args.tied_mlp_blocks
     actor_tied_mlp_iters = args.actor_tied_mlp_iters or args.tied_mlp_iters
     actor = Actor(
         action_size=action_size,
@@ -886,11 +877,9 @@ if __name__ == "__main__":
         recur_pre_norm=args.recur_pre_norm,
         recur_alpha_mode=args.recur_alpha_mode,
         recur_alpha_init=args.recur_alpha_init,
-        tied_mlp_blocks=actor_tied_mlp_blocks,
         tied_mlp_iters=actor_tied_mlp_iters,
         tied_mlp_ffn_mult=args.tied_mlp_ffn_mult,
         tied_mlp_layerscale_init=args.tied_mlp_layerscale_init,
-        tied_mlp_step_embed_dim=args.tied_mlp_step_embed_dim,
         tied_mlp_trunc_bptt=args.tied_mlp_trunc_bptt,
     )
     def build_optimizer(lr: float) -> optax.GradientTransformation:
@@ -908,7 +897,6 @@ if __name__ == "__main__":
     )
 
     # Critic
-    critic_tied_mlp_blocks = args.critic_tied_mlp_blocks or args.tied_mlp_blocks
     critic_tied_mlp_iters = args.critic_tied_mlp_iters or args.tied_mlp_iters
     sa_encoder = SA_encoder(
         network_width=args.critic_network_width,
@@ -925,11 +913,9 @@ if __name__ == "__main__":
         recur_pre_norm=args.recur_pre_norm,
         recur_alpha_mode=args.recur_alpha_mode,
         recur_alpha_init=args.recur_alpha_init,
-        tied_mlp_blocks=critic_tied_mlp_blocks,
         tied_mlp_iters=critic_tied_mlp_iters,
         tied_mlp_ffn_mult=args.tied_mlp_ffn_mult,
         tied_mlp_layerscale_init=args.tied_mlp_layerscale_init,
-        tied_mlp_step_embed_dim=args.tied_mlp_step_embed_dim,
         tied_mlp_trunc_bptt=args.tied_mlp_trunc_bptt,
     )
     sa_encoder_params = sa_encoder.init(sa_key, np.ones([1, args.obs_dim]), np.ones([1, action_size]))
@@ -948,11 +934,9 @@ if __name__ == "__main__":
         recur_pre_norm=args.recur_pre_norm,
         recur_alpha_mode=args.recur_alpha_mode,
         recur_alpha_init=args.recur_alpha_init,
-        tied_mlp_blocks=critic_tied_mlp_blocks,
         tied_mlp_iters=critic_tied_mlp_iters,
         tied_mlp_ffn_mult=args.tied_mlp_ffn_mult,
         tied_mlp_layerscale_init=args.tied_mlp_layerscale_init,
-        tied_mlp_step_embed_dim=args.tied_mlp_step_embed_dim,
         tied_mlp_trunc_bptt=args.tied_mlp_trunc_bptt,
     )
     g_encoder_params = g_encoder.init(g_key, np.ones([1, args.goal_end_idx - args.goal_start_idx]))

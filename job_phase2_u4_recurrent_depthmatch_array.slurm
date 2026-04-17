@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=phase2_u4_tievsstack
-#SBATCH --output=logs/phase2_u4_tievsstack_%A_%a.out
-#SBATCH --error=logs/phase2_u4_tievsstack_%A_%a.err
+#SBATCH --job-name=phase2_u4_array
+#SBATCH --output=logs/phase2_u4_array_%A_%a.out
+#SBATCH --error=logs/phase2_u4_array_%A_%a.err
 #SBATCH --time=03:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -11,22 +11,20 @@
 #SBATCH --partition=gpu
 #
 # Usage:
-#   sbatch --array=0-11 job_phase2_u4_tie_vs_stack_d16_d32_array.slurm
-#   sbatch --array=0-11%6 job_phase2_u4_tie_vs_stack_d16_d32_array.slurm   # throttle
+#   sbatch --array=0-5 job_phase2_u4_recurrent_depthmatch_array.slurm
+#   sbatch --array=0-5%6 job_phase2_u4_recurrent_depthmatch_array.slurm            # throttle
 #
 # Optional (pin a GPU type; pick one your cluster supports):
-#   sbatch --gres=gpu:h100-47:1 --array=0-11 job_phase2_u4_tie_vs_stack_d16_d32_array.slurm
+#   sbatch --gres=gpu:h100-47:1 --array=0-5 job_phase2_u4_recurrent_depthmatch_array.slurm
 #
-# Compares tied vs stacked critics at D=16 and D=32 on standard U4 (train=eval).
-# - Actor: untied_resnet depth=D
-# - Critic: tied_mlp applied to critic only, with steps K=D/4
-#   - Tied:   1×K
-#   - Untied: K×1
+# Recurrent depth-matching sweep on U4.
+# Each array task runs one config on one GPU, allowing SLURM to schedule many
+# tasks concurrently (up to your QOS per-user GPU cap).
 
 set -e
 
 mkdir -p logs
-OUT_DIR="results/phase2/array_u4_tievsstack/${SLURM_JOB_ID:-local}"
+OUT_DIR="results/phase2/array_u4/${SLURM_JOB_ID:-local}"
 mkdir -p "$OUT_DIR"
 
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -42,7 +40,7 @@ export WANDB_DIR="${SLURM_TMPDIR:-/tmp}"
 ENV_ID="ant_u4_maze"
 EVAL_ENV_ID="ant_u4_maze"
 SEEDS=(1001 1003 1004)
-NUM_CONFIGS=4
+NUM_CONFIGS=2
 
 COMMON_ARGS="--no-track \
   --no-capture-vis \
@@ -68,7 +66,6 @@ COMMON_ARGS="--no-track \
 
 TIED_MLP_ARGS="--tied-mlp-ffn-mult 2.667 \
   --tied-mlp-layerscale-init 0.01 \
-  --tied-mlp-step-embed-dim 0 \
   --tied-mlp-trunc-bptt 0"
 
 task_id=${SLURM_ARRAY_TASK_ID:-0}
@@ -82,35 +79,21 @@ SEED="${SEEDS[$seed_idx]}"
 
 case "$cfg_idx" in
   0)
-    NAME="u4_tievsstack_d16_critic_tied_1x4"
-    ACTOR_DEPTH=16
-    CRITIC_BLOCKS=1
-    CRITIC_ITERS=4
-    CRITIC_STEPS=4
+    NAME="u4_recurrentcritic_d32_k8"
+    CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
+      --actor-depth 32 --critic-depth 32 \
+      --encoder-type tied_mlp --recur-apply-to-actor 0 --recur-apply-to-critic 1 \
+      --critic-recur-steps 8 $TIED_MLP_ARGS --critic-tied-mlp-iters 8)
     ;;
   1)
-    NAME="u4_tievsstack_d16_critic_untied_4x1"
-    ACTOR_DEPTH=16
-    CRITIC_BLOCKS=4
-    CRITIC_ITERS=1
-    CRITIC_STEPS=4
-    ;;
-  2)
-    NAME="u4_tievsstack_d32_critic_tied_1x8"
-    ACTOR_DEPTH=32
-    CRITIC_BLOCKS=1
-    CRITIC_ITERS=8
-    CRITIC_STEPS=8
-    ;;
-  3)
-    NAME="u4_tievsstack_d32_critic_untied_8x1"
-    ACTOR_DEPTH=32
-    CRITIC_BLOCKS=8
-    CRITIC_ITERS=1
-    CRITIC_STEPS=8
+    NAME="u4_recurrentcritic_d64_k16"
+    CMD=(python scripts/crl_train.py --exp-name "$NAME" $COMMON_ARGS \
+      --actor-depth 64 --critic-depth 64 \
+      --encoder-type tied_mlp --recur-apply-to-actor 0 --recur-apply-to-critic 1 \
+      --critic-recur-steps 16 $TIED_MLP_ARGS --critic-tied-mlp-iters 16)
     ;;
   *)
-    echo "Unknown config index $cfg_idx (expected 0-3)" >&2
+    echo "Unknown config index $cfg_idx (expected 0-1)" >&2
     exit 2
     ;;
 esac
@@ -120,23 +103,10 @@ GPU_NAME="$(command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name
 
 LOG="logs/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.log"
 OUT="${OUT_DIR}/${NAME}_s${SEED}_${SLURM_JOB_ID:-local}_${task_id}.csv"
-echo "config,seed,node,gpu_name,git_rev,args_sha1,actor_depth,critic_blocks,critic_iters,critic_steps,env_steps_final,success_rate_final,success_any_final,eval_reward_final,env_steps_tailmean,success_rate_tailmean,success_any_tailmean,eval_reward_tailmean,param_count,training_time_hours" > "$OUT"
+echo "config,seed,node,gpu_name,git_rev,args_sha1,env_steps_final,success_rate_final,success_any_final,eval_reward_final,env_steps_tailmean,success_rate_tailmean,success_any_tailmean,eval_reward_tailmean,param_count,training_time_hours" > "$OUT"
 
 echo "[$(date +%H:%M:%S)] Running $NAME on 1 GPU..."
-python scripts/crl_train.py \
-  --exp-name "$NAME" \
-  $COMMON_ARGS \
-  --seed "$SEED" \
-  --actor-depth "$ACTOR_DEPTH" \
-  --critic-depth "$ACTOR_DEPTH" \
-  --encoder-type tied_mlp \
-  --recur-apply-to-actor 0 \
-  --recur-apply-to-critic 1 \
-  --critic-recur-steps "$CRITIC_STEPS" \
-  $TIED_MLP_ARGS \
-  --critic-tied-mlp-blocks "$CRITIC_BLOCKS" \
-  --critic-tied-mlp-iters "$CRITIC_ITERS" \
-  > "$LOG" 2>&1
+"${CMD[@]}" --seed "$SEED" > "$LOG" 2>&1
 
 final_line=$(grep "final_summary:" "$LOG" | tail -1 || true)
 tail_line=$(grep "tail_mean_summary:" "$LOG" | tail -1 || true)
@@ -146,6 +116,7 @@ fi
 if [ -z "$tail_line" ]; then
   tail_line="$final_line"
 fi
+
 env_steps_final=$(echo "$final_line" | grep -oP "'training/envsteps': \\K[0-9.]+|'training/envsteps': \\Knan" || echo "N/A")
 success_rate_final=$(echo "$final_line" | grep -oP "'eval/success_rate': \\K[0-9.]+|'eval/success_rate': \\Knan" || echo "N/A")
 success_any_final=$(echo "$final_line" | grep -oP "'eval/episode_success_any': \\K[0-9.]+|'eval/episode_success_any': \\Knan" || echo "N/A")
@@ -164,5 +135,5 @@ if [ "$train_time" != "N/A" ]; then
   train_time=$(echo "scale=2; $train_time / 3600" | bc)
 fi
 
-echo "$NAME,$SEED,$NODE,$GPU_NAME,$git_rev,$args_sha1,$ACTOR_DEPTH,$CRITIC_BLOCKS,$CRITIC_ITERS,$CRITIC_STEPS,$env_steps_final,$success_rate_final,$success_any_final,$eval_reward_final,$env_steps_tailmean,$success_rate_tailmean,$success_any_tailmean,$eval_reward_tailmean,$param_count,$train_time" >> "$OUT"
+echo "$NAME,$SEED,$NODE,$GPU_NAME,$git_rev,$args_sha1,$env_steps_final,$success_rate_final,$success_any_final,$eval_reward_final,$env_steps_tailmean,$success_rate_tailmean,$success_any_tailmean,$eval_reward_tailmean,$param_count,$train_time" >> "$OUT"
 echo "[$(date +%H:%M:%S)] Done. Row written to $OUT"

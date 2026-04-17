@@ -1,15 +1,15 @@
-"""Tied MLP architecture with SwiGLU, FiLM conditioning, and LayerScale.
+"""Weight-tied recurrent SwiGLU MLP with additive step embeddings and LayerScale.
 
-This module implements a weight-tied MLP architecture where L distinct blocks
-are applied cyclically for K iterations, giving L*K total block applications.
-
-Architecture per block:
-    u = (1 + γ_k) ⊙ LayerNorm(x) + β_k    # FiLM conditioning on step k
-    a = W_a @ u                            # SwiGLU gate projection
-    g = W_g @ u                            # SwiGLU value projection
-    h = a ⊙ SiLU(g)                        # SwiGLU activation
-    Δ = W_o @ h                            # Output projection
-    x = x + α * Δ                          # LayerScale residual
+Architecture:
+    x = input_projection(input)
+    for k in range(K):
+        u = LayerNorm(x) + e_k             # pre-LN, then additive step embedding
+        a = W_a @ u                        # SwiGLU gate projection
+        g = W_g @ u                        # SwiGLU value projection
+        h = a ⊙ SiLU(g)                    # SwiGLU activation
+        Δ = W_o @ h                        # Output projection
+        x = x + α * Δ                      # LayerScale residual
+    y = output_projection(x)
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from flax.linen.initializers import variance_scaling
 
 
 class SwiGLUBlock(nn.Module):
-    """Single SwiGLU block with FiLM conditioning and LayerScale.
+    """Single recurrent SwiGLU block with additive step conditioning and LayerScale.
 
     Attributes:
         width: Hidden dimension of the block.
@@ -35,13 +35,12 @@ class SwiGLUBlock(nn.Module):
     layerscale_init: float = 1e-2
 
     @nn.compact
-    def __call__(self, x: jnp.ndarray, gamma: jnp.ndarray, beta: jnp.ndarray) -> jnp.ndarray:
-        """Apply the block with FiLM conditioning.
+    def __call__(self, x: jnp.ndarray, step_embed: jnp.ndarray) -> jnp.ndarray:
+        """Apply the block with additive step conditioning.
 
         Args:
             x: Input tensor of shape (..., width).
-            gamma: FiLM scale parameter of shape (..., width).
-            beta: FiLM shift parameter of shape (..., width).
+            step_embed: Additive step embedding of shape (..., width).
 
         Returns:
             Output tensor of shape (..., width).
@@ -51,9 +50,9 @@ class SwiGLUBlock(nn.Module):
         kernel_init = variance_scaling(1 / 3, "fan_in", "uniform")
         bias_init = nn.initializers.zeros
 
-        # FiLM conditioning: u = (1 + γ) ⊙ LayerNorm(x) + β
+        # Pre-LN followed by additive step embedding.
         u = nn.LayerNorm()(x)
-        u = (1.0 + gamma) * u + beta
+        u = u + step_embed
 
         # SwiGLU: h = a ⊙ SiLU(g)
         a = nn.Dense(ffn_dim, kernel_init=kernel_init, bias_init=bias_init, name="W_a")(u)
@@ -73,69 +72,44 @@ class SwiGLUBlock(nn.Module):
 
 
 class TiedMLP(nn.Module):
-    """Tied MLP with L distinct blocks applied cyclically for K iterations.
-
-    The total number of block applications is L * K (or num_blocks * num_iters).
-    For comparison with untied baselines:
-        - Loop-1: 1 block × 4 iters = 4 block applications
-        - Loop-2: 2 blocks × 2 iters = 4 block applications
-        - Loop-4: 4 blocks × 1 iter = 4 block applications (equivalent to untied)
+    """Tied MLP with one repeated SwiGLU block applied for K iterations.
 
     Attributes:
         width: Hidden dimension.
-        num_blocks: Number of distinct blocks (L).
-        num_iters: Number of iterations to apply the blocks (K).
+        num_iters: Number of recurrent refinement iterations (K).
         ffn_mult: Multiplier for FFN intermediate dimension.
         layerscale_init: Initial value for LayerScale parameter.
-        step_embed_dim: Dimension of step embeddings (defaults to width if 0).
         trunc_bptt: If > 0, detach gradients every this many steps.
     """
     width: int
-    num_blocks: int = 1
     num_iters: int = 4
     ffn_mult: float = 8 / 3
     layerscale_init: float = 1e-2
-    step_embed_dim: int = 0
     trunc_bptt: int = 0
 
     def setup(self) -> None:
-        """Initialize blocks and step embeddings."""
-        self.total_steps = self.num_blocks * self.num_iters
+        """Initialize the repeated block and step embeddings."""
+        self.total_steps = self.num_iters
 
-        # Step embedding dimension
-        embed_dim = self.step_embed_dim if self.step_embed_dim > 0 else self.width
-
-        # Learned step embeddings for FiLM: outputs [gamma, beta] for each step
-        # We embed each step index to produce gamma and beta
         self.step_embed = nn.Embed(
             num_embeddings=self.total_steps,
-            features=embed_dim,
+            features=self.width,
+            embedding_init=nn.initializers.zeros,
         )
 
-        # Project step embedding to gamma and beta
-        self.film_proj = nn.Dense(
-            2 * self.width,
-            kernel_init=nn.initializers.zeros,  # Initialize near identity
-            bias_init=nn.initializers.zeros,
+        self.block = SwiGLUBlock(
+            width=self.width,
+            ffn_mult=self.ffn_mult,
+            layerscale_init=self.layerscale_init,
+            name="block",
         )
-
-        # Create L distinct blocks
-        self.blocks = [
-            SwiGLUBlock(
-                width=self.width,
-                ffn_mult=self.ffn_mult,
-                layerscale_init=self.layerscale_init,
-                name=f"block_{i}",
-            )
-            for i in range(self.num_blocks)
-        ]
 
     def __call__(self, x: jnp.ndarray, steps: Optional[jnp.ndarray] = None) -> jnp.ndarray:
         """Apply the tied MLP.
 
         Args:
             x: Input tensor of shape (..., width).
-            steps: Optional override for number of total steps (must be <= total_steps).
+            steps: Optional override for number of recurrent steps (must be <= total_steps).
                    Can be an int or a scalar jnp.ndarray.
 
         Returns:
@@ -152,23 +126,8 @@ class TiedMLP(nn.Module):
                 raise ValueError(f"steps ({num_steps}) exceeds total_steps ({self.total_steps})")
 
         for step_idx in range(num_steps):
-            # Get block index (cyclic)
-            block_idx = step_idx % self.num_blocks
-            block = self.blocks[block_idx]
-
-            # Get FiLM parameters for this step
-            step_embed = self.step_embed(jnp.asarray(step_idx))
-
-            # Broadcast for batched inputs
-            if x.ndim > 1:
-                step_embed = jnp.broadcast_to(step_embed, (x.shape[0], step_embed.shape[-1]))
-
-            # Project to gamma and beta
-            film_params = self.film_proj(step_embed)
-            gamma, beta = jnp.split(film_params, 2, axis=-1)
-
-            # Apply block
-            x = block(x, gamma, beta)
+            step_embed = self._lookup_step_embed(step_idx, x)
+            x = self.block(x, step_embed)
 
             # Truncated BPTT
             if self.trunc_bptt > 0 and (step_idx + 1) % self.trunc_bptt == 0:
@@ -176,32 +135,34 @@ class TiedMLP(nn.Module):
 
         return x
 
+    def _lookup_step_embed(self, step_idx: int, x: jnp.ndarray) -> jnp.ndarray:
+        embed = self.step_embed(jnp.asarray(step_idx))
+        if x.ndim == 1:
+            return embed
+        return jnp.broadcast_to(embed, (x.shape[0], embed.shape[-1]))
+
 
 class TiedMLPEncoder(nn.Module):
     """Encoder using TiedMLP as the core, matching the interface of existing encoders.
 
     Structure:
-        1. Input projection: Dense -> LayerNorm -> Swish
+        1. Input projection: Dense
         2. TiedMLP core
         3. Output projection: Dense
 
     Attributes:
         width: Hidden dimension.
         output_dim: Output dimension (e.g., 64 for critic encoders).
-        num_blocks: Number of distinct blocks in TiedMLP.
         num_iters: Number of iterations in TiedMLP.
         ffn_mult: FFN expansion multiplier.
         layerscale_init: LayerScale initialization value.
-        step_embed_dim: Step embedding dimension.
         trunc_bptt: Truncated BPTT window (0 = disabled).
     """
     width: int
     output_dim: int = 64
-    num_blocks: int = 1
     num_iters: int = 4
     ffn_mult: float = 8 / 3
     layerscale_init: float = 1e-2
-    step_embed_dim: int = 0
     trunc_bptt: int = 0
 
     @nn.compact
@@ -220,17 +181,13 @@ class TiedMLPEncoder(nn.Module):
 
         # Input projection
         x = nn.Dense(self.width, kernel_init=kernel_init, bias_init=bias_init)(x)
-        x = nn.LayerNorm()(x)
-        x = nn.swish(x)
 
         # TiedMLP core
         x = TiedMLP(
             width=self.width,
-            num_blocks=self.num_blocks,
             num_iters=self.num_iters,
             ffn_mult=self.ffn_mult,
             layerscale_init=self.layerscale_init,
-            step_embed_dim=self.step_embed_dim,
             trunc_bptt=self.trunc_bptt,
         )(x, steps=steps)
 
