@@ -31,7 +31,7 @@ OUT_DIR="results/u4_k4_paper_recipe"
 mkdir -p "$OUT_DIR"
 
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate recurrent
+conda activate online
 
 export WANDB_DIR="${SLURM_TMPDIR:-/tmp}"
 
