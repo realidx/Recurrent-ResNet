@@ -1507,6 +1507,8 @@ if __name__ == "__main__":
         metrics["model/param_count"] = param_count
         if args.episode_length > 0:
             if "eval/episode_success" in metrics:
+                metrics["eval/time_at_goal"] = metrics["eval/episode_success"]
+            if "eval/episode_success" in metrics:
                 metrics["eval/success_rate"] = metrics["eval/episode_success"] / args.episode_length
             if "eval/episode_success_easy" in metrics:
                 metrics["eval/success_easy_rate"] = metrics["eval/episode_success_easy"] / args.episode_length
@@ -1533,6 +1535,8 @@ if __name__ == "__main__":
                 "training/logits_pos",
                 "training/logits_neg",
                 "eval/episode_reward",
+                "eval/episode_success",
+                "eval/time_at_goal",
                 "eval/success_rate",
                 "eval/success_hard_rate",
                 "eval/success_easy_rate",
